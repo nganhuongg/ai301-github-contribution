@@ -1,15 +1,17 @@
-# Contribution [#]: [Issue Title]
+# Contribution 1: Support for Sparse MoE models like Camelidae and Sparsetral
 
 **Contribution Number:** 1  
 **Student:** Ngan Huong Nguyen
-**Issue:** [GitHub issue link]  
-**Status:** [Phase I] [In Progress]
+**Issue:** [[GitHub issue link]](https://github.com/ggml-org/llama.cpp/issues/5365)  
+**Status:** Phase I - In Progress
 
 ---
 
 ## Why I Chose This Issue
 
-[1-2 paragraphs explaining why this issue interests you, how it matches your skills/learning goals, what you hope to learn]
+I chose this issue because it is closely related to large language model inference, model architectures, and systems programming, which are areas I want to explore more deeply. I am currently learning NLP, transformers, and modern LLM systems, so contributing to llama.cpp provides an opportunity to understand how production-grade inference engines support different model architectures.
+
+This issue also matches my technical background. I am comfortable with C++ and Python and have experience reading and modifying machine learning codebases. Through this contribution, I hope to learn how model conversion, tensor mapping, and inference support are implemented in real-world LLM infrastructure.
 
 ---
 
@@ -17,15 +19,15 @@
 
 ### Problem Description
 
-[In your own words, what's broken or missing?]
+Currently, the project is supporting lots of standard Mixture-of-Expert (MoE) architectures, but does not provide explicit support for Sparse MoE architectures although sparse MoE architectures require less memory but perform better compared to standard ones.
 
 ### Expected Behavior
 
-[What should happen?]
+Users should be able to convert, load, and run Sparse MoE models in llama.cpp in the same way they can run other supported MoE architectures.
 
 ### Current Behavior
 
-[What actually happens?]
+Support for Sparse MoE is not available, preventing these models from being used through the standard llama.cpp workflow.
 
 ### Affected Components
 
