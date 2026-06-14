@@ -22,7 +22,7 @@ This issue also matches my technical background. I am comfortable with C++ and P
 
 ### Problem Description
 
-Currently, the project is supporting lots of standard Mixture-of-Expert (MoE) architectures, but does not provide explicit support for Sparse MoE architectures although sparse MoE architectures require less memory but perform better compared to standard ones.
+Currently, the project is supporting lots of standard Mixture-of-Expert (MoE) architectures, but does not provide explicit support for Sparse MoE architectures. These architectures combine dense base model computation with routed lightweight adapter experts, requiring different model conversion, metadata, and runtime handling compared to traditional MoE implementations.
 
 Paper: [Parameter-Efficient Sparsity Crafting from Dense to Mixture-of-Experts for Instruction Tuning on General Tasks](http://arxiv.org/pdf/2401.02731 ) 
 
@@ -61,7 +61,7 @@ Quantization:
 - This matters because routed experts are likely stored as per-expert 3D tensors or paired low-rank expert tensors. If the tensor categories are wrong, conversion might work but quantization could skip important tensors, quantize router tensors incorrectly, or produce a GGUF that no longer loads or matches the reference model.
 
 ### Defined Scope
-For this issue, I would start with Sparsetral before Camelidae because it has clearer public artifacts: config, custom modeling code, named fields like model_type: sparsetral, num_experts, and topk. That makes it easier to reproduce, inspect tensor names, and compare against HF behavior.
+The goal of this contribution is not to support only a single model, but to investigate support for the Sparse LoRA-MoE architecture family described in the PESC paper. Sparsetral will be used as the initial investigation target because its public artifacts (configuration, custom modeling code, and checkpoints) make the architecture easier to inspect and reproduce. Camelidae will be used later to validate whether the implementation generalizes across models from the same architecture family.
 
 ---
 
