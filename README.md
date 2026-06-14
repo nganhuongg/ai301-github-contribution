@@ -69,19 +69,36 @@ The goal of this contribution is not to support only a single model, but to inve
 
 ### Environment Setup
 
-[Notes on setting up your local development environment - challenges you faced, how you solved them]
+I installed requirements for the project and found out some version mismatches due to my use of Python 3.13. That caused repeated install failures because llama.cpp requirements pin packages like numpy~=1.26.4, which do not have suitable wheels for Python 3.13. Pip tried to build NumPy from source, then failed because no C/C++ compiler was installed. The fix was to use Python 3.12.10 and recreate the venv with that version. I also needed to install PyTorch version for CPU individually because the project requirements require platform_machine == "s390x".
 
 ### Steps to Reproduce
 
-1. [Step 1]
-2. [Step 2]
-3. [Observed result]
+1. Download the Sparsetral model: Since the initial goal is to determine whether the current conversion pipeline recognizes and supports the Sparsetral architecture, downloading the entire model checkpoint is not necessary at this stage. Therefore, to reproduce the problem, I only downloaded `config.json`, `tokenizer_config.json`, `tokenizer.model`, `modeling_sparsetral.py`, `model.safetensors.index.json` and `configuration_sparsetral.py`
+
+2. Create a local model directory and place the downloaded files inside it.
+
+   ````bash
+   mkdir -p models/sparsetral-minimal`
+
+3. Attempt to run the standard Hugging Face to GGUF conversion pipeline
+
+`python convert_hf_to_gguf.py models/sparsetral-minimal --outfile sparsetral.gguf` 
+
+4. Converter can read config, load architecture name, and correctly define model as `modeling_sparsetral.MistralForCausalLM`. It fails at architecture support.
 
 ### Reproduction Evidence
 
-- **Commit showing reproduction:** [Link to commit in your fork]
-- **Screenshots/logs:** [If applicable]
-- **My findings:** [What you discovered during reproduction]
+- **Commit showing reproduction:** [Link](https://github.com/ggml-org/llama.cpp/commit/7f2954dcb64ac5a1ab2f7e8c21b93aa5feca6560)
+- **Screenshots/logs:** 
+<img width="493" height="175" alt="image" src="https://github.com/user-attachments/assets/c690bf3e-ce34-4c1d-813b-7237f82e1dcc" />
+
+- **My findings:** My initial hypothesis was that the conversion pipeline might fail to recognize the Sparsetral architecture. However, reproduction showed that the converter successfully loads the configuration and identifies the architecture as `modeling_sparsetral.MistralForCausalLM`. 
+
+The failure occurs at the architecture support stage:
+
+`ERROR: Model modeling_sparsetral.MistralForCausalLM is not supported`
+
+This suggests that the issue is not basic architecture recognition, but rather the absence of a registered conversion path for Sparsetral models within the Hugging Face → GGUF conversion pipeline.
 
 ---
 
