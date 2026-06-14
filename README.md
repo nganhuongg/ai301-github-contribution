@@ -1,15 +1,18 @@
 # Contribution 1: Support for Sparse MoE models like Camelidae and Sparsetral
 
 **Contribution Number:** 1  
+
 **Student:** Ngan Huong Nguyen
-**Issue:** [[GitHub issue link]](https://github.com/ggml-org/llama.cpp/issues/5365)  
-**Status:** Phase I - In Progress
+
+**Issue:** [Support for Sparse MoE models like Camelidae and Sparsetral](https://github.com/COG-GTM/llama.cpp/issues/291)  
+
+**Status:** Phase I - Completed
 
 ---
 
 ## Why I Chose This Issue
 
-I chose this issue because it is closely related to large language model inference, model architectures, and systems programming, which are areas I want to explore more deeply. I am currently learning NLP, transformers, and modern LLM systems, so contributing to llama.cpp provides an opportunity to understand how production-grade inference engines support different model architectures.
+I chose this issue because it is closely related to areas that I want to explore deeply, including large language model inference, model architectures, and systems programming. I am currently learning NLP, transformers, and modern deep learning systems, so contributing to llama.cpp provides an opportunity to understand how production-grade inference engines support different model architectures.
 
 This issue also matches my technical background. I am comfortable with C++ and Python and have experience reading and modifying machine learning codebases. Through this contribution, I hope to learn how model conversion, tensor mapping, and inference support are implemented in real-world LLM infrastructure.
 
@@ -20,6 +23,8 @@ This issue also matches my technical background. I am comfortable with C++ and P
 ### Problem Description
 
 Currently, the project is supporting lots of standard Mixture-of-Expert (MoE) architectures, but does not provide explicit support for Sparse MoE architectures although sparse MoE architectures require less memory but perform better compared to standard ones.
+
+Paper: [Parameter-Efficient Sparsity Crafting from Dense to Mixture-of-Experts for Instruction Tuning on General Tasks](http://arxiv.org/pdf/2401.02731 ) 
 
 ### Expected Behavior
 
