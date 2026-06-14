@@ -60,6 +60,9 @@ Quantization:
 - `src/llama-quant.cpp`
 - This matters because routed experts are likely stored as per-expert 3D tensors or paired low-rank expert tensors. If the tensor categories are wrong, conversion might work but quantization could skip important tensors, quantize router tensors incorrectly, or produce a GGUF that no longer loads or matches the reference model.
 
+### Defined Scope
+For this issue, I would start with Sparsetral before Camelidae because it has clearer public artifacts: config, custom modeling code, named fields like model_type: sparsetral, num_experts, and topk. That makes it easier to reproduce, inspect tensor names, and compare against HF behavior.
+
 ---
 
 ## Reproduction Process
