@@ -6,7 +6,7 @@
 
 **Issue:** [Support for Sparse MoE models like Camelidae and Sparsetral](https://github.com/ggml-org/llama.cpp/issues/5365)  
 
-**Status:** Phase I - Completed
+**Status:** Phase II - In Progress
 
 ---
 
@@ -28,7 +28,7 @@ Paper: [Parameter-Efficient Sparsity Crafting from Dense to Mixture-of-Experts f
 
 ### Expected Behavior
 
-Users should be able to convert, load, and run Sparse MoE models in llama.cpp in the same way they can run other supported MoE architectures.
+Support for sparse adapter experts: a dense base model remains active while token routing selects lightweight LoRA-like expert MLPs.
 
 ### Current Behavior
 
@@ -36,7 +36,29 @@ Support for Sparse MoE is not available, preventing these models from being used
 
 ### Affected Components
 
-[Which parts of the codebase are involved?]
+GGUF Conversion:
+- `convert_hf_to_gguf.py`, `conversion/`, `gguf-py/gguf/`
+- The converter needs to recognize the architecture, normalize its config, map its custom tensor names and write GGUF metadata before runtime code can be exercised.
+
+GGUF architecture, tensor, and metadata names:
+- `gguf-py/gguf/constants.py`, `gguf-py/gguf/tensor_mapping.py`, `src/llama-arch.h`, `src/llama-arch.cpp`
+- These files define the contract between converted files and C++ loading code. Sparse adapter experts need stable tensor names and metadata for expert count, top-k routing, adapter dimensions, and any weighting behavior; otherwise conversion may produce tensors the loader cannot find or the graph cannot interpret.
+
+Runtime loading:
+- `src/llama-model.cpp`, `src/models/`
+- This layer decides which model class handles the GGUF, validates hparams, creates expected tensors, and reports missing or mismatched tensors. Fixing sparse LoRA MoE support requires the loader to distinguish dense base FFN tensors from routed adapter-expert tensors and to create both sets with the correct shapes.
+
+MoE graph construction:
+- `src/llama-graph.cpp`, `build_moe_ffn()`
+- Sparsetral-like models should reuse these routing primitives, but their adapter experts appear to be added on top of the dense MLP instead of replacing the whole FFN like many existing MoE models.
+
+Adapter:
+- `convert_lora_to_gguf.py`, `src/llama-adapter.h`, `src/llama-adapter.cpp`, `src/llama-context.cpp`
+- This code shows how llama.cpp represents low-rank A/B weights, applies scaling, and matches adapter weights to base tensors. Sparse MoE adapters are LoRA-like expert weights selected per token, so the implementation should reuse or mirror these semantics rather than inventing an unrelated adapter mechanism.
+
+Quantization:
+- `src/llama-quant.cpp`
+- This matters because routed experts are likely stored as per-expert 3D tensors or paired low-rank expert tensors. If the tensor categories are wrong, conversion might work but quantization could skip important tensors, quantize router tensors incorrectly, or produce a GGUF that no longer loads or matches the reference model.
 
 ---
 
