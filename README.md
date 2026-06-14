@@ -106,30 +106,61 @@ This suggests that the issue is not basic architecture recognition, but rather t
 
 ### Analysis
 
-[Your analysis of the root cause - what's causing the issue?]
+After reproducing the issue, I found that the converter can read the local Sparsetral model configuration, but fails when it tries to match the model architecture to a supported converter implementation. This suggests that the first root cause is not missing model files or tokenizer files, but the absence of a registered conversion path for Sparsetral in the Hugging Face to GGUF conversion pipeline. The converter identifies the architecture as `modeling_sparsetral.MistralForCausalLM`, but does not know which existing converter class or architecture mapping should handle it.
 
 ### Proposed Solution
 
-[High-level description of your fix approach]
+I will first investigate whether Sparsetral can reuse an existing Mistral or Mixtral-style converter path with modifications, or whether it needs a dedicated converter class. The first fix should be narrowly scoped to architecture recognition and conversion support before attempting runtime inference or quantization.
+
+If Sparsetral’s base tensors match an existing Mistral-style layout, I will reuse the existing conversion logic as much as possible and only add the missing mappings for Sparsetral-specific router and sparse adapter expert tensors.
 
 ### Implementation Plan
 
 Using UMPIRE framework (adapted):
 
-**Understand:** [Restate the problem]
+**Understand:** The current converter does not support Sparsetral. It can identify the model architecture, but fails because `modeling_sparsetral.MistralForCausalLM` is not registered or mapped to a supported converter path.
 
-**Match:** [What similar patterns/solutions exist in the codebase?]
+**Match:** I will study similar model conversion patterns in the codebase, especially:
 
-**Plan:** [Step-by-step implementation plan]
-1. [Modify file X to do Y]
-2. [Add function Z]
-3. [Update tests]
+- Existing Mistral conversion logic
+- Existing Mixtral or MoE conversion logic
+- Tensor mapping rules for MoE expert weights
+- Architecture registration patterns in the GGUF conversion pipeline
 
-**Implement:** [Link to your branch/commits as you work]
+**Plan:** 
+1. Inspect how `convert_hf_to_gguf.py` selects a converter class from the Hugging Face model architecture.
+2. Find where supported architecture names are registered.
+3. Compare Sparsetral’s `config.json` and `modeling_sparsetral.py` against existing Mistral/Mixtral-style models.
+4. Add architecture recognition for `modeling_sparsetral.MistralForCausalLM`.
+5. Add or extend tensor mappings for Sparsetral-specific router and sparse expert tensors if needed.
+6. Run the converter again on the minimal Sparsetral files. If architecture recognition succeeds, continue investigating the next failure point, likely tensor mapping or missing weight files.
 
-**Review:** [Self-review checklist - does it follow the project's contribution guidelines?]
+**Implement:** https://github.com/nganhuongg/llama.cpp/tree/fix-issue-5365
 
-**Evaluate:** [How will you verify it works?]
+**Review:** 
+Before submitting a PR, I will verify that:
+
+- [ ] The issue is not already being addressed by another open PR.
+- [ ] The implementation is limited to a single feature (Sparse MoE architecture support) and does not include unrelated changes.
+- [ ] The solution follows existing llama.cpp architecture registration and converter patterns whenever possible.
+- [ ] No unnecessary third-party dependencies, files, or frameworks are introduced.
+- [ ] New code follows the project's coding guidelines (naming conventions, formatting, and existing code style).
+- [ ] The implementation remains cross-platform and does not introduce platform-specific assumptions.
+- [ ] I can explain every line of code that I submit.
+- [ ] Any AI assistance was limited to code navigation, explanation, debugging support, and drafting ideas; the final implementation and reasoning are manually reviewed and understood.
+- [ ] Existing functionality for supported models is not broken.
+- [ ] Relevant conversion and loading tests have been executed successfully.
+- [ ] The change is focused on CPU support only unless additional backend support is explicitly required.
+- [ ] Commit messages are clear and follow project conventions.
+- [ ] The PR description clearly explains the problem, implementation approach, and validation results.
+
+**Evaluate:** I will verify the fix by:
+
+- Running the converter on the minimal Sparsetral reproduction directory.
+- Confirming that the previous architecture support error no longer occurs.
+- Checking whether the converter progresses to the next expected stage.
+- Running existing relevant conversion or architecture tests if available.
+- Later, when full model files are available, testing full GGUF conversion and model loading.
 
 ---
 
