@@ -61,7 +61,7 @@ Quantization:
 - This matters because routed experts are likely stored as per-expert 3D tensors or paired low-rank expert tensors. If the tensor categories are wrong, conversion might work but quantization could skip important tensors, quantize router tensors incorrectly, or produce a GGUF that no longer loads or matches the reference model.
 
 ### Defined Scope
-The goal of this contribution is not to support only a single model, but to investigate support for the Sparse LoRA-MoE architecture family described in the PESC paper. Sparsetral will be used as the initial investigation target because its public artifacts (configuration, custom modeling code, and checkpoints) make the architecture easier to inspect and reproduce. Camelidae will be used later to validate whether the implementation generalizes across models from the same architecture family.
+The goal of this contribution is not to support only a single model, but to investigate support for the Sparse LoRA-MoE architecture family described in the PESC paper. [Sparsetral](https://huggingface.co/serpdotai/sparsetral-16x7B-v2/tree/main) will be used as the initial investigation target because its public artifacts (configuration, custom modeling code, and checkpoints) make the architecture easier to inspect and reproduce. [Camelidae](https://huggingface.co/hywu/Camelidae-8x13B) will be used later to validate whether the implementation generalizes across models from the same architecture family.
 
 ---
 
