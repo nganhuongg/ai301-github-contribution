@@ -188,12 +188,13 @@ Before submitting a PR, I will verify that:
 ### Week 3 Progress
 
 [What you built this week, challenges faced, decisions made]
+This week, I spent time understanding the codebase. As the repo consists of a lot of files and each file contains hundreds to thousands line of codes, it takes me many times to navigating errors and related functions. I documented my codebase investigation below.
 
 #### Navigating Error
 - Reproduced the issue again using a minimal Sparsetral model directory.
 - Confirmed that `get_model_architecture()` successfully identifies the architecture as `modeling_sparsetral.MistralForCausalLM`.
 - Located the failure point in `convert_hf_to_gguf.py`: the converter raises an error when `get_model_class()` cannot find a supported conversion path for the architecture (Line 233 -- 235).
-- Next step: investigate how model architectures are registered and mapped to converter classes, then compare Sparsetral against existing Mistral/Mixtral conversion implementations. 
+- **Understanding Codebase**: `convert_hf_to_gguf.py` loaded hyperparameters from chosen model's `config.json` and passed them through shared functions and classes from `conversion` package. Two related functions are `get_model_architecture(hparams, model_type)` from `conversion/base.py` and `get_model_class(model_architecture)` from `conversion/__init__.py`.  `get_model_class(model_architecture)` tries to find the converter class in TEXT_MODEL_MAP but finds nothing.
 
 ### Week [Y] Progress
 
