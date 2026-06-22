@@ -268,10 +268,10 @@ However, Sparsetral introduces `moe_adapter.router`, `adapter_down`, and `adapte
 Therefore, my current implementation decision is to avoid treating Sparsetral as plain Mixtral. The safer direction is to create a Sparsetral-specific conversion path that reuses the existing LLaMA/Mistral converter for dense backbone tensors, then adds separate handling for Sparsetral’s routed adapter tensors.
 
 #### Progress Against Week 2 Plan
-- Completed: inspected how convert_hf_to_gguf.py selects a converter class.
+- Completed: inspected how `convert_hf_to_gguf.py` selects a converter class.
 - Completed: found where supported architecture names are registered.
 - Completed: compared Sparsetral’s config and tensor names against existing LLaMA/Mistral/Mixtral assumptions.
-- Next: add architecture registration for modeling_sparsetral.MistralForCausalLM.
+- Next: add architecture registration for `modeling_sparsetral.MistralForCausalLM`.
 - Next: create or extend a converter class for Sparsetral-specific tensor handling.
 
 #### Next Steps
