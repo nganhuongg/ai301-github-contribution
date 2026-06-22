@@ -238,10 +238,10 @@ The issue is likely not caused by the dense transformer architecture itself. Ins
 Current GGUF MoE support primarily targets full FFN experts. Existing tensor mappings cover structures such as:
 
 ```py
-block_sparse_moe.gate
-block_sparse_moe.experts.w1
-block_sparse_moe.experts.w2
-block_sparse_moe.experts.w3
+model.layers.{bid}.block_sparse_moe.gate
+model.layers.{bid}.block_sparse_moe.experts.w1
+model.layers.{bid}.block_sparse_moe.experts.w2
+model.layers.{bid}.block_sparse_moe.experts.w3
 ```
 These correspond to full expert feed-forward networks used by models such as Mixtral and PhiMoE. In contrast, Sparsetral introduces a different tensor structure:
 
