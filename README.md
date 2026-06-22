@@ -188,13 +188,101 @@ Before submitting a PR, I will verify that:
 ### Week 3 Progress
 
 [What you built this week, challenges faced, decisions made]
-This week, I spent time understanding the codebase. As the repo consists of a lot of files and each file contains hundreds to thousands line of codes, it takes me many times to navigating errors and related functions. I documented my codebase investigation below.
+This week, I moved from reproduction into implementation preparation. Since `llama.cpp` is a large codebase with many conversion, GGUF, and runtime files, I first traced the converter failure to understand the smallest safe implementation path.
 
 #### Navigating Error
 - Reproduced the issue again using a minimal Sparsetral model directory.
 - Confirmed that `get_model_architecture()` successfully identifies the architecture as `modeling_sparsetral.MistralForCausalLM`.
 - Located the failure point in `convert_hf_to_gguf.py`: the converter raises an error when `get_model_class()` cannot find a supported conversion path for the architecture (Line 233 -- 235).
-- **Understanding Codebase**: `convert_hf_to_gguf.py` loaded hyperparameters from chosen model's `config.json` and passed them through shared functions and classes from `conversion` package. Two related functions are `get_model_architecture(hparams, model_type)` from `conversion/base.py` and `get_model_class(model_architecture)` from `conversion/__init__.py`.  `get_model_class(model_architecture)` tries to find the converter class in TEXT_MODEL_MAP but finds nothing.
+- **Understanding Codebase**: `convert_hf_to_gguf.py` loaded hyperparameters from chosen model's `config.json` and passed them through shared functions and classes from `conversion` package. Two related functions are `get_model_architecture(hparams, model_type)` from `conversion/base.py` and `get_model_class(model_architecture)` from `conversion/__init__.py`. `get_model_class()` decides whether llama.cpp has a converter registered for that exact architecture string. In this case, `get_model_class(model_architecture)` tries to find the converter class in TEXT_MODEL_MAP but finds nothing.
+
+#### Sparsetral Architecture
+- Sparsetral is MoE-style, but it is not Mixtral-style full MoE. It is a Mistral-style dense model with routed adapter experts added inside the MLP.
+- This distinction is important for conversion support. Routing Sparsetral through a standard `MixtralForCausalLM` conversion path would likely be incorrect because Mixtral expects full expert FFN tensors. In contrast, Sparsetral contains standard Mistral FFN tensors together with additional Sparse MoE components such as router and adapter expert tensors (`adapter_down`, `adapter_up`, etc.).
+
+As a result, Sparsetral may require either:
+- a dedicated converter implementation, or
+- an extension of the existing Mistral/LLaMA conversion pipeline to handle routed adapter experts and their associated metadata.
+
+#### Investigating Converter Assumptions
+
+I compared Sparsetral's configuration against the assumptions used by the existing LLaMA/Mistral conversion pipeline.
+
+**Findings**
+
+The dense base transformer configuration appears compatible with the existing `LlamaModel` converter:
+
+| Field | Status |
+|---------|---------|
+| `hidden_size` | Supported |
+| `intermediate_size` | Supported |
+| `num_hidden_layers` | Supported |
+| `num_attention_heads` | Supported |
+| `num_key_value_heads` | Supported |
+| `max_position_embeddings` | Supported |
+| `rms_norm_eps` | Supported |
+| `rope_theta` | Supported |
+| `vocab_size` | Supported |
+
+This suggests that Sparsetral's base architecture is largely compatible with existing Mistral/LLaMA conversion logic.
+
+However, Sparsetral introduces several custom Sparse MoE adapter fields:
+
+| Field | Status | Notes |
+|---------|---------|---------|
+| `num_experts` | Partially supported | Existing converter recognizes expert count |
+| `topk` | Not mapped | Existing code expects `num_experts_per_tok`, `num_experts_per_token`, or `top_k_experts` |
+| `adapter_dim` | Not supported | Adapter bottleneck dimension |
+| `moe_scaling` | Not supported | Adapter output scaling |
+| `moe_dtype` | Likely unsupported | Implementation-specific dtype |
+| `model_type: sparsetral` | Unsupported | No dedicated converter path |
+| `architectures: modeling_sparsetral.MistralForCausalLM` | Unsupported | Current conversion failure |
+
+The issue is likely not caused by the dense transformer architecture itself. Instead, the missing support appears to be related to Sparsetral-specific Sparse MoE adapter metadata and tensor mappings. 
+
+Current GGUF MoE support primarily targets full FFN experts. Existing tensor mappings cover structures such as:
+
+```py
+block_sparse_moe.gate
+block_sparse_moe.experts.w1
+block_sparse_moe.experts.w2
+block_sparse_moe.experts.w3
+```
+These correspond to full expert feed-forward networks used by models such as Mixtral and PhiMoE. In contrast, Sparsetral introduces a different tensor structure:
+
+```py
+model.layers.{bid}.mlp.moe_adapter.router.weight
+model.layers.{bid}.mlp.moe_adapter.experts.{xid}.adapter_down.weight
+model.layers.{bid}.mlp.moe_adapter.experts.{xid}.adapter_up.weight
+```
+The adapter experts are added on top of the dense Mistral FFN rather than replacing it with full expert FFNs. 
+
+**Findings**: The current GGUF schema and converter logic already support:
+
+- Dense Mistral/LLaMA FFN tensors
+- Full MoE expert tensors (`w1`, `w2`, `w3`)
+- Several router implementations used by existing MoE models
+
+However, Sparsetral introduces `moe_adapter.router`, `adapter_down`, and `adapter_up`. These tensor names and their semantics are not currently represented by existing tensor mappings. As a result, simply routing `modeling_sparsetral.MistralForCausalLM` through the existing Mixtral conversion path would likely be incomplete or incorrect.
+
+Therefore, my current implementation decision is to avoid treating Sparsetral as plain Mixtral. The safer direction is to create a Sparsetral-specific conversion path that reuses the existing LLaMA/Mistral converter for dense backbone tensors, then adds separate handling for Sparsetral’s routed adapter tensors.
+
+#### Progress Against Week 2 Plan
+- Completed: inspected how convert_hf_to_gguf.py selects a converter class.
+- Completed: found where supported architecture names are registered.
+- Completed: compared Sparsetral’s config and tensor names against existing LLaMA/Mistral/Mixtral assumptions.
+- Next: add architecture registration for modeling_sparsetral.MistralForCausalLM.
+- Next: create or extend a converter class for Sparsetral-specific tensor handling.
+
+#### Next Steps
+
+1. Registering `modeling_sparsetral.MistralForCausalLM` with an appropriate converter path.
+2. Creating or extending a converter class for Sparsetral.
+3. Reusing existing LLaMA/Mistral conversion logic for the dense backbone.
+4. Adding Sparsetral-specific handling for `moe_adapter.router`, `adapter_down`, and `adapter_up` tensors.
+5. Checking whether new GGUF tensor names or metadata are needed for routed adapter experts.
+
+The goal for the first implementation step is not full runtime inference yet. The immediate goal is to move the conversion pipeline past the current unsupported-architecture error and reach the next concrete failure point, such as tensor mapping or GGUF metadata representation.
 
 ### Week [Y] Progress
 
