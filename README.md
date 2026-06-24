@@ -277,11 +277,41 @@ Therefore, my current implementation decision is to avoid treating Sparsetral as
 4. Adding Sparsetral-specific handling for `moe_adapter.router`, `adapter_down`, and `adapter_up` tensors.
 5. Checking whether new GGUF tensor names or metadata are needed for routed adapter experts.
 
-The goal for the first implementation step is not full runtime inference yet. The immediate goal is to move the conversion pipeline past the current unsupported-architecture error and reach the next concrete failure point, such as tensor mapping or GGUF metadata representation.
+### Week 4 Progress
 
-### Week [Y] Progress
+#### Registering `modeling_sparsetral.MistralForCausalLM` 
+- **Commit showing progress:** [Link](https://github.com/ggml-org/llama.cpp/commit/244ef9be1f2c23aa0cfbec563e5abd9657482296) 
+- **Screenshots/logs:**
+<img width="814" height="859" alt="image" src="https://github.com/user-attachments/assets/31087838-658d-41c3-8501-c1aae082d122" />
 
-[Continue documenting as you work]
+- **Descriptions:**
+I added a dedicated Sparsetral conversion path. The converter now recognizes the exact Hugging Face architecture string: `modeling_sparsetral.MistralForCausalLM`
+
+I also normalized Sparsetral's router metadata:
+  - `num_experts` is read as the total expert count
+  - `topk` is mapped to the existing `experts_used_per_token` metadata
+  - the router scoring function is recorded as softmax, matching the HF forward implementation
+
+- **Validations:**
+I reran conversion on the minimal Sparsetral directory. Before this change, conversion stopped at:
+```PowerShell
+  Model modeling_sparsetral.MistralForCausalLM is not supported
+```
+After this change, the converter progressed into GGUF metadata export and logged:
+
+```
+  expert count = 16
+  experts used count = 4
+  expert score gating function = softmax
+```
+This confirms that architecture registration and metadata normalization are working.
+
+- **Current limitation:**
+The minimal test directory does not contain actual safetensors weight shards, so the converter produced a metadata-only GGUF:
+
+  `n_tensors` = 0
+
+This means the current validation proves architecture registration and metadata handling, but it does not yet prove tensor conversion.
 
 ### Code Changes
 
