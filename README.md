@@ -285,12 +285,10 @@ Therefore, my current implementation decision is to avoid treating Sparsetral as
 <img width="814" height="859" alt="image" src="https://github.com/user-attachments/assets/31087838-658d-41c3-8501-c1aae082d122" />
 
 - **Descriptions:**
-I added a dedicated Sparsetral conversion path. The converter now recognizes the exact Hugging Face architecture string: `modeling_sparsetral.MistralForCausalLM`
-
-I also normalized Sparsetral's router metadata:
-  - `num_experts` is read as the total expert count
-  - `topk` is mapped to the existing `experts_used_per_token` metadata
-  - the router scoring function is recorded as softmax, matching the HF forward implementation
+I added a dedicated Sparsetral conversion path. The converter now recognizes the exact Hugging Face architecture string: `modeling_sparsetral.MistralForCausalLM`. I also normalized Sparsetral's router metadata:
+      - `num_experts` is read as the total expert count
+      - `topk` is mapped to the existing `experts_used_per_token` metadata
+      - the router scoring function is recorded as softmax, matching the HF forward implementation
 
 - **Validations:**
 I reran conversion on the minimal Sparsetral directory. Before this change, conversion stopped at:
