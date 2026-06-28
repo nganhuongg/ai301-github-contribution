@@ -311,6 +311,58 @@ The minimal test directory does not contain actual safetensors weight shards, so
 
 This means the current validation proves architecture registration and metadata handling, but it does not yet prove tensor conversion.
 
+#### Design Sparsetral tensor mapping
+
+- **Description:**
+
+After enabling architecture registration, I designed the GGUF tensor mapping for Sparsetral's Sparse MoE adapter tensors.
+
+The existing GGUF schema already supports:
+
+- Dense FFN tensors (`FFN_GATE`, `FFN_DOWN`, `FFN_UP`)
+- Full MoE expert tensors (`FFN_GATE_EXP`, `FFN_DOWN_EXP`, `FFN_UP_EXP`)
+
+However, Sparsetral uses a different architecture. Instead of replacing the dense FFN with full experts as in Mixtral, it keeps the dense Mistral FFN and adds routed adapter experts through:
+
+```text
+model.layers.{bid}.mlp.moe_adapter.router.weight
+model.layers.{bid}.mlp.moe_adapter.experts.{xid}.adapter_down.weight
+model.layers.{bid}.mlp.moe_adapter.experts.{xid}.adapter_up.weight
+```
+
+Because these tensors have different semantics from Mixtral experts, I decided not to reuse the existing `FFN_*_EXP` tensor names. Instead, I introduced dedicated tensor names:
+
+```text
+blk.{bid}.ffn_moe_adapter_gate.weight
+blk.{bid}.ffn_moe_adapter_down_exps.weight
+blk.{bid}.ffn_moe_adapter_up_exps.weight
+```
+
+This preserves the distinction between full FFN experts and routed adapter experts while remaining consistent with the existing GGUF naming conventions.
+
+- **Implementation:**
+
+Current implementation includes:
+
+- Added new GGUF tensor identifiers in `gguf-py/gguf/constants.py`.
+- Added Hugging Face → GGUF tensor mappings in `gguf-py/gguf/tensor_mapping.py`.
+- Added corresponding tensor identifiers in `src/llama-arch.h`.
+- Added C++ tensor names in `src/llama-arch.cpp`.
+- Implemented expert tensor collection and stacking in `conversion/sparsetral.py`.
+- Merged individual `adapter_down` and `adapter_up` tensors across all experts into a single expert-stacked tensor before GGUF conversion.
+
+- **Current Status**
+
+The tensor mapping implementation is currently under validation.
+
+The converter now reaches the Sparsetral-specific tensor conversion stage. Remaining work includes:
+
+- validating tensor shapes using real `.safetensors` shards,
+- verifying the generated GGUF tensor names,
+- confirming that no adapter tensors are silently dropped during conversion.
+
+This stage focuses only on establishing a correct GGUF tensor contract. Runtime loading and graph execution will be implemented after tensor conversion is fully validated.
+
 ### Code Changes
 
 - **Files modified:** [List]
