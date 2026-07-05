@@ -6,7 +6,7 @@
 
 **Issue:** [Support for Sparse MoE models like Camelidae and Sparsetral](https://github.com/ggml-org/llama.cpp/issues/5365)  
 
-**Status:** Phase II - In Progress
+**Status:** Phase III - In Progress
 
 ---
 
@@ -22,7 +22,7 @@ This issue also matches my technical background. I am comfortable with C++ and P
 
 ### Problem Description
 
-Currently, the project is supporting lots of standard Mixture-of-Expert (MoE) architectures, but does not provide explicit support for Sparse MoE architectures. These architectures combine dense base model computation with routed lightweight adapter experts, requiring different model conversion, metadata, and runtime handling compared to traditional MoE implementations.
+Currently, the project supports many standard Mixture-of-Expert (MoE) architectures, but does not provide explicit support for Sparse MoE architectures. These architectures combine dense base model computation with routed lightweight adapter experts, requiring different model conversion, metadata, and runtime handling compared to traditional MoE implementations.
 
 Paper: [Parameter-Efficient Sparsity Crafting from Dense to Mixture-of-Experts for Instruction Tuning on General Tasks](http://arxiv.org/pdf/2401.02731 ) 
 
@@ -106,7 +106,7 @@ This suggests that the issue is not basic architecture recognition, but rather t
 
 ### Analysis
 
-After reproducing the issue, I found that the converter can read the local Sparsetral model configuration, but fails when it tries to match the model architecture to a supported converter implementation. This suggests that the first root cause is not missing model files or tokenizer files, but the absence of a registered conversion path for Sparsetral in the Hugging Face to GGUF conversion pipeline. The converter identifies the architecture as `modeling_sparsetral.MistralForCausalLM`, but does not know which existing converter class or architecture mapping should handle it.
+After reproducing the issue, I found that the converter can read the local Sparsetral model configuration, but fails when it tries to match the model architecture to a supported converter implementation. This suggests that the first root cause is the absence of a registered conversion path for Sparsetral in the Hugging Face to GGUF conversion pipeline. The converter identifies the architecture as `modeling_sparsetral.MistralForCausalLM`, but does not know which existing converter class or architecture mapping should handle it.
 
 ### Proposed Solution
 
@@ -342,26 +342,63 @@ This preserves the distinction between full FFN experts and routed adapter exper
 
 - **Implementation:**
 
-Current implementation includes:
+- **`conversion/sparsetral.py`**
+  - Added buffering and stacking logic for Sparsetral adapter expert tensors.
+  - Matches Hugging Face tensors of the form:
+    ```text
+    model.layers.{bid}.mlp.moe_adapter.experts.{xid}.{adapter_down|adapter_up}.weight
+    ```
+  - Buffers per-layer expert tensors until all `num_experts` are collected.
+  - Merges experts into a single 3D tensor using `torch.stack(..., dim=0)`.
+  - Emits merged tensor names:
+    ```text
+    model.layers.{bid}.mlp.moe_adapter.experts.adapter_down.weight
+    model.layers.{bid}.mlp.moe_adapter.experts.adapter_up.weight
+    ```
+  - Added validation to ensure no incomplete expert buffers remain after conversion.
 
-- Added new GGUF tensor identifiers in `gguf-py/gguf/constants.py`.
-- Added Hugging Face → GGUF tensor mappings in `gguf-py/gguf/tensor_mapping.py`.
-- Added corresponding tensor identifiers in `src/llama-arch.h`.
-- Added C++ tensor names in `src/llama-arch.cpp`.
-- Implemented expert tensor collection and stacking in `conversion/sparsetral.py`.
-- Merged individual `adapter_down` and `adapter_up` tensors across all experts into a single expert-stacked tensor before GGUF conversion.
+- **`gguf-py/gguf/constants.py`**
+  - Added new GGUF tensor identifiers:
+    - `FFN_MOE_ADAPTER_GATE`
+    - `FFN_MOE_ADAPTER_DOWN`
+    - `FFN_MOE_ADAPTER_UP`
+  - Registered corresponding GGUF tensor names:
+    ```text
+    blk.{bid}.ffn_moe_adapter_gate.weight
+    blk.{bid}.ffn_moe_adapter_down_exps.weight
+    blk.{bid}.ffn_moe_adapter_up_exps.weight
+    ```
 
-- **Current Status**
+- **`gguf-py/gguf/tensor_mapping.py`**
+  - Added Hugging Face → GGUF mappings:
+    - `moe_adapter.router` → `FFN_MOE_ADAPTER_GATE`
+    - merged `adapter_down` → `FFN_MOE_ADAPTER_DOWN`
+    - merged `adapter_up` → `FFN_MOE_ADAPTER_UP`
 
-The tensor mapping implementation is currently under validation.
+- **`src/llama-arch.h`**
+  - Added corresponding C++ tensor enums:
+    - `LLM_TENSOR_FFN_MOE_ADAPTER_GATE`
+    - `LLM_TENSOR_FFN_MOE_ADAPTER_DOWN`
+    - `LLM_TENSOR_FFN_MOE_ADAPTER_UP`
 
-The converter now reaches the Sparsetral-specific tensor conversion stage. Remaining work includes:
+- **`src/llama-arch.cpp`**
+  - Registered the corresponding GGUF tensor names for the new adapter tensors.
 
-- validating tensor shapes using real `.safetensors` shards,
-- verifying the generated GGUF tensor names,
-- confirming that no adapter tensors are silently dropped during conversion.
+- **Design Decision**
 
-This stage focuses only on establishing a correct GGUF tensor contract. Runtime loading and graph execution will be implemented after tensor conversion is fully validated.
+  The new tensor names follow existing llama.cpp naming conventions:
+
+  - `blk.{bid}` for per-layer tensors.
+  - `ffn_` because the tensors belong to the feed-forward (MLP) module.
+  - `moe_adapter` preserves the Hugging Face module name.
+  - `gate`, `down`, and `up` follow existing projection terminology.
+  - `_exps` is consistent with existing expert-stacked tensor naming.
+
+### Week 5 Progress
+
+#### Verify Python Converter
+
+
 
 ### Code Changes
 
