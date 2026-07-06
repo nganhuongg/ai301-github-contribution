@@ -519,9 +519,9 @@ The fix was to add a dedicated Sparsetral sparse-adapter loading path instead of
 
 - **Current limitation**:
 
-Loading support is separate from correct inference. Day 3 proves the loader can recognize and allocate the adapter tensors. It does not yet prove the adapter math is wired into the graph.
+Loading support is separate from correct inference. The current state proves the loader can recognize and allocate the adapter tensors. It does not yet prove the adapter math is wired into the graph.
 
-The next step is Day 4: update the LLaMA FFN graph so it computes the dense FFN output, computes routed adapter contributions, and adds them correctly.
+The next step is to update the LLaMA FFN graph so it computes the dense FFN output, computes routed adapter contributions, and adds them correctly.
 
 
 ### Code Changes
