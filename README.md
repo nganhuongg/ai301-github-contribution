@@ -421,7 +421,7 @@ blk.{bid}.ffn_moe_adapter_up_exps.weight    { adapter_dim, n_embd, n_expert }
 
 I converted the full local Sparsetral model directory:
 
-    `python convert_hf_to_gguf.py .\models\sparsetral-minimal --outfile .\sparsetral.gguf`
+`python convert_hf_to_gguf.py .\models\sparsetral-minimal --outfile .\sparsetral.gguf`
 
 Conversion completed successfully:
 
@@ -437,9 +437,7 @@ This confirms the full model shards are available and the converter can export a
 
 #### C++ tensor loading support
 - **Description**:
-I added C++ loading support for Sparsetral's dense FFN plus sparse adapter tensors.
-
-    The previous LLaMA loader used this branching model:
+I added C++ loading support for Sparsetral's dense FFN plus sparse adapter tensors. The previous LLaMA loader used this branching model:
 
 ```
     if (n_expert == 0) {
@@ -452,6 +450,7 @@ I added C++ loading support for Sparsetral's dense FFN plus sparse adapter tenso
 This does not work for Sparsetral. Sparsetral has expert_count = 16, but it is not Mixtral-style full MoE. It keeps the dense Mistral FFN and adds routed adapter experts.
 
 Sparsetral needs a third path:
+
 ```
     if (sparse adapter model) {
         load dense FFN
@@ -464,37 +463,14 @@ Sparsetral needs a third path:
 ```
 
 - **Implementation**:
-      - `src/llama-model.h`
+  
+`src/llama-arch.cpp`
 
-        Added tensor fields for Sparsetral adapter tensors:
+Added LLM_TENSOR_INFOS entries for the new adapter tensors:
 ```
-        ffn_moe_adapter_gate
-        ffn_moe_adapter_down_exps
-        ffn_moe_adapter_up_exps
-```
-
-      - `src/models/llama.cpp`
-
-        Added loading for dense FFN tensors plus optional sparse adapter
-        tensors:
-```
-        blk.{bid}.ffn_gate.weight
-        blk.{bid}.ffn_down.weight
-        blk.{bid}.ffn_up.weight
-        blk.{bid}.ffn_moe_adapter_gate.weight
-        blk.{bid}.ffn_moe_adapter_down_exps.weight
-        blk.{bid}.ffn_moe_adapter_up_exps.weight
-```
-      - `src/llama-arch.cpp`
-
-        Added LLM_TENSOR_INFOS entries for the new adapter tensors:
-```
-        {LLM_TENSOR_FFN_MOE_ADAPTER_GATE, {LLM_TENSOR_LAYER_REPEATING,
-        GGML_OP_MUL_MAT}},
-        {LLM_TENSOR_FFN_MOE_ADAPTER_DOWN, {LLM_TENSOR_LAYER_REPEATING,
-        GGML_OP_MUL_MAT_ID}},
-        {LLM_TENSOR_FFN_MOE_ADAPTER_UP,   {LLM_TENSOR_LAYER_REPEATING,
-        GGML_OP_MUL_MAT_ID}},
+{LLM_TENSOR_FFN_MOE_ADAPTER_GATE, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+{LLM_TENSOR_FFN_MOE_ADAPTER_DOWN, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+{LLM_TENSOR_FFN_MOE_ADAPTER_UP,   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
 ```
 The router is a normal matrix multiply. The down/up adapter tensors are expert-stacked 3D tensors, so they use indexed matmul.
 
@@ -527,6 +503,7 @@ and assumed the model was Mixtral-style full MoE. It tried to load:
     blk.0.ffn_down_exps.weight
     blk.0.ffn_up_exps.weight
 ```
+
 Sparsetral does not have those tensors. It has dense FFN tensors plus sparse adapter tensors:
 
 ```
