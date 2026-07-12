@@ -322,6 +322,7 @@ However, Sparsetral uses a different architecture. Instead of replacing the dens
 - **Implementation:**
 
 **`conversion/sparsetral.py`**
+
      - Added buffering and stacking logic for Sparsetral adapter expert tensors.
      - Matches Hugging Face tensors of the form:
     ```text
@@ -337,6 +338,7 @@ However, Sparsetral uses a different architecture. Instead of replacing the dens
      - Added validation to ensure no incomplete expert buffers remain after conversion.
 
 **`gguf-py/gguf/constants.py`**
+
   - Added new GGUF tensor identifiers: `FFN_MOE_ADAPTER_GATE`, `FFN_MOE_ADAPTER_DOWN`, `FFN_MOE_ADAPTER_UP`
   - Registered corresponding GGUF tensor names:
     ```text
@@ -346,6 +348,7 @@ However, Sparsetral uses a different architecture. Instead of replacing the dens
     ```
 
 **`gguf-py/gguf/tensor_mapping.py`**
+
   - Added Hugging Face → GGUF mappings:
     `moe_adapter.router` → `FFN_MOE_ADAPTER_GATE`
     merged `adapter_down` → `FFN_MOE_ADAPTER_DOWN`
@@ -408,104 +411,11 @@ Although conversion succeeded, llama.cpp could not yet load the model correctly.
 
 The next milestone was to implement a dedicated sparse-adapter loading path.
 
-#### C++ tensor loading support
-- **Description**:
-I added C++ loading support for Sparsetral's dense FFN plus sparse adapter tensors. The previous LLaMA loader used this branching model:
-
-```
-    if (n_expert == 0) {
-        load dense FFN
-    } else {
-        load full MoE FFN
-    }
-```
-
-This does not work for Sparsetral. Sparsetral has expert_count = 16, but it is not Mixtral-style full MoE. It keeps the dense Mistral FFN and adds routed adapter experts.
-
-Sparsetral needs a third path:
-
-```
-    if (sparse adapter model) {
-        load dense FFN
-        load adapter router/down/up tensors
-    } else if (n_expert == 0) {
-        load dense FFN
-    } else {
-        load full MoE FFN
-    }
-```
-
-- **Implementation**:
-  
-`src/llama-arch.cpp`
-
-Added LLM_TENSOR_INFOS entries for the new adapter tensors:
-```
-{LLM_TENSOR_FFN_MOE_ADAPTER_GATE, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-{LLM_TENSOR_FFN_MOE_ADAPTER_DOWN, {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
-{LLM_TENSOR_FFN_MOE_ADAPTER_UP,   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
-```
-The router is a normal matrix multiply. The down/up adapter tensors are expert-stacked 3D tensors, so they use indexed matmul.
-
-- **Validation**:
-
-I built an x64 Release binary:
-```
-    cmake -B build-x64 -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
-    cmake --build build-x64
-```
-Then tested loading:
-```
-    .\build-x64\bin\llama-cli.exe -m .\sparsetral.gguf -p "Hello" -n 16
-```
-#### Error analysis: **Wrong MoE loading path**
-
-After rebuilding x64, loading failed with:
-```
-    missing tensor 'blk.0.ffn_gate_inp.weight'
-```
-    
-This happened because llama.cpp saw:
-```
-    expert_count = 16
-```
-and assumed the model was Mixtral-style full MoE. It tried to load:
-```
-    blk.0.ffn_gate_inp.weight
-    blk.0.ffn_gate_exps.weight
-    blk.0.ffn_down_exps.weight
-    blk.0.ffn_up_exps.weight
-```
-
-Sparsetral does not have those tensors. It has dense FFN tensors plus sparse adapter tensors:
-
-```
-    blk.0.ffn_gate.weight
-    blk.0.ffn_down.weight
-    blk.0.ffn_up.weight
-    blk.0.ffn_moe_adapter_gate.weight
-    blk.0.ffn_moe_adapter_down_exps.weight
-    blk.0.ffn_moe_adapter_up_exps.weight
-```
-
-The fix was to add a dedicated Sparsetral sparse-adapter loading path instead of treating every model with expert_count > 0 as full MoE.
-
-- **Current limitation**:
-
-Loading support is separate from correct inference. The current state proves the loader can recognize and allocate the adapter tensors. It does not yet prove the adapter math is wired into the graph.
-
-The next step is to update the LLaMA FFN graph so it computes the dense FFN output, computes routed adapter contributions, and adds them correctly.
-
 ### Week 6 Progress
 
 #### Implement the Sparsetral sparse-adapter loading path
 
 After completing GGUF conversion, I implemented C++ runtime support for loading Sparsetral's dense FFN and routed adapter tensors. This is the checkpoint between GGUF conversion support and full inference support: the model now converts to GGUF with adapter metadata and loads successfully instead of being mistaken for a full Mixtral-style MoE model.
-
-<img width="1333" height="748" alt="image" src="https://github.com/user-attachments/assets/5b3e6009-a696-40de-9d83-a052e8b56c1e" />
-
-
-<img width="1333" height="801" alt="image" src="https://github.com/user-attachments/assets/86506fd1-79ef-4dd8-a9aa-984ab595ec1b" />
 
 **Observing Errors:**
 
@@ -635,6 +545,10 @@ The current implementation confirms that:
 - dense FFN and adapter tensors are allocated successfully;
 - the model no longer enters the incorrect full-MoE loading path.
 
+<img width="1333" height="748" alt="image" src="https://github.com/user-attachments/assets/5b3e6009-a696-40de-9d83-a052e8b56c1e" />
+
+<img width="1333" height="801" alt="image" src="https://github.com/user-attachments/assets/86506fd1-79ef-4dd8-a9aa-984ab595ec1b" />
+
 **Current Limitation**
 
 Runtime loading is now supported, but correct sparse-adapter inference is not yet implemented.
@@ -649,7 +563,6 @@ The adapter tensors are loaded into memory, but the FFN computation graph still 
 - add the routed adapter contribution to the dense FFN output.
 
 The next milestone is therefore sparse-adapter graph construction and numerical validation against the Hugging Face implementation.
-
 
 ### Code Changes
 
