@@ -523,6 +523,89 @@ Loading support is separate from correct inference. The current state proves the
 
 The next step is to update the LLaMA FFN graph so it computes the dense FFN output, computes routed adapter contributions, and adds them correctly.
 
+### Week 6 Progress
+
+#### Implement the Sparsetral sparse-adapter loading path
+
+This is the checkpoint between GGUF conversion support and full inference support: the model now converts to GGUF with adapter metadata and loads successfully instead of being mistaken for a full Mixtral-style MoE model.
+
+<img width="1333" height="748" alt="image" src="https://github.com/user-attachments/assets/5b3e6009-a696-40de-9d83-a052e8b56c1e" />
+
+
+<img width="1333" height="801" alt="image" src="https://github.com/user-attachments/assets/86506fd1-79ef-4dd8-a9aa-984ab595ec1b" />
+
+**Implementation:**
+
+I added GGUF metadata for Sparsetral's adapter bottleneck dimension. Sparsetral uses routed low-rank adapters with shape hidden_size -> adapter_dim -> hidden_size, so C++ needs adapter_dim to allocate the adapter expert tensors correctly. 
+
+- `gguf-py/gguf/constants.py`
+
+Added the adapter_feed_forward_length metadata key and registered the new sparse-adapter tensor names.
+
+- `gguf-py/gguf/gguf_writer.py`
+
+Added a writer method for adapter_feed_forward_length.
+
+- `conversion/sparsetral.py`
+
+Wrote adapter_dim from the Sparsetral config into GGUF metadata. Also kept the adapter expert stacking logic that merges per-expert HF tensors into GGUF expert-stacked tensors.
+
+- `gguf-py/gguf/tensor_mapping.py`
+
+Mapped Sparsetral HF tensor names to the new GGUF tensor names: ffn_moe_adapter_gate, ffn_moe_adapter_down_exps, and ffn_moe_adapter_up_exps.
+
+- `src/llama-arch.h and src/llama-arch.cpp`
+
+Added C++ metadata and tensor enum entries, GGUF name strings, and tensor op metadata for the sparse-adapter tensors.
+
+- `src/llama-hparams.h`
+
+Added n_ff_adapter to store the adapter bottleneck dimension from GGUF metadata.
+
+- `src/llama-model.h`
+
+Added three tensor fields to llama_layer for the adapter router, down projection, and up projection.
+
+- `src/models/llama.cpp`
+
+Added a third loading path for sparse adapter MoE models. Sparsetral has expert_count > 0, but it is not a full MoE model. The new path loads the dense FFN tensors plus optional sparse-adapter tensors, avoiding the previous failure where llama.cpp looked for blk.0.ffn_gate_inp.weight.
+
+**Results**
+
+The updated converter successfully exported the full local Sparsetral model:
+
+```
+  n_tensors = 387, total_size = 18.8G
+  Model successfully exported to sparsetral-new.gguf
+```
+
+The new x64 build successfully loaded sparsetral-new.gguf and ran the test prompt:
+```
+  .\build-msvc-x64\bin\llama-cli.exe -m .\sparsetral-new.gguf -p "Hello" -n 16
+```
+
+This confirms the loader now recognizes the sparse-adapter layout and no longer falls into the full MoE loading path.
+
+**Validation:**
+
+I validated the work through a convert-build-load loop:
+
+  1. Rebuilt llama.cpp with the new C++ metadata and tensor loading changes using an x64 MSVC build.
+
+  2. Reconverted the Sparsetral model after adding the new adapter_feed_forward_length metadata.
+
+  3. Confirmed the converter produced a real GGUF with all tensors, not just metadata.
+  4. Ran llama-cli against the new GGUF and verified the previous loader error was fixed.
+
+The previous failure was:
+
+```
+  missing tensor 'blk.0.ffn_gate_inp.weight'
+```
+
+That error is now resolved. Current checkpoint validates loading support only; the next contribution step is wiring the sparse-adapter tensors into the FFN graph so inference uses the adapters, not just the dense Mistral FFN.
+
+
 
 ### Code Changes
 
