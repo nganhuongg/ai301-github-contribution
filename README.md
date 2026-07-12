@@ -262,13 +262,6 @@ However, Sparsetral introduces `moe_adapter.router`, `adapter_down`, and `adapte
 
 Therefore, my current implementation decision is to avoid treating Sparsetral as plain Mixtral. The safer direction is to create a Sparsetral-specific conversion path that reuses the existing LLaMA/Mistral converter for dense backbone tensors, then adds separate handling for Sparsetral’s routed adapter tensors.
 
-#### Progress Against Week 2 Plan
-- Completed: inspected how `convert_hf_to_gguf.py` selects a converter class.
-- Completed: found where supported architecture names are registered.
-- Completed: compared Sparsetral’s config and tensor names against existing LLaMA/Mistral/Mixtral assumptions.
-- Next: add architecture registration for `modeling_sparsetral.MistralForCausalLM`.
-- Next: create or extend a converter class for Sparsetral-specific tensor handling.
-
 #### Next Steps
 
 1. Registering `modeling_sparsetral.MistralForCausalLM` with an appropriate converter path.
@@ -285,7 +278,7 @@ Therefore, my current implementation decision is to avoid treating Sparsetral as
 <img width="814" height="859" alt="image" src="https://github.com/user-attachments/assets/31087838-658d-41c3-8501-c1aae082d122" />
 
 - **Descriptions:**
-I added a dedicated Sparsetral conversion path. The converter now recognizes the exact Hugging Face architecture string: `modeling_sparsetral.MistralForCausalLM`. I also normalized Sparsetral's router metadata:
+The first implementation milestone was enabling the Hugging Face to GGUF converter to recognize Sparsetral. I added a dedicated Sparsetral conversion path. The converter now recognizes the exact Hugging Face architecture string: `modeling_sparsetral.MistralForCausalLM`. I also normalized Sparsetral's router metadata:
       - `num_experts` is read as the total expert count
       - `topk` is mapped to the existing `experts_used_per_token` metadata
       - the router scoring function is recorded as softmax, matching the HF forward implementation
@@ -311,57 +304,40 @@ The minimal test directory does not contain actual safetensors weight shards, so
 
 This means the current validation proves architecture registration and metadata handling, but it does not yet prove tensor conversion.
 
-#### Design Sparsetral tensor mapping
+### Week 5 Progress
+
+#### Implement Sparsetral Tensor Conversion
 
 - **Description:**
 
-After enabling architecture registration, I designed the GGUF tensor mapping for Sparsetral's Sparse MoE adapter tensors.
+After enabling architecture registration, I designed the GGUF tensor mapping for Sparsetral's Sparse MoE adapter tensors. Sparsetral keeps the standard dense Mistral FFN and adds routed adapter tensors. These tensors cannot be represented accurately using the existing Mixtral full-expert mappings, so I introduced dedicated GGUF tensor identifiers and conversion logic.
 
 The existing GGUF schema already supports:
 
 - Dense FFN tensors (`FFN_GATE`, `FFN_DOWN`, `FFN_UP`)
 - Full MoE expert tensors (`FFN_GATE_EXP`, `FFN_DOWN_EXP`, `FFN_UP_EXP`)
 
-However, Sparsetral uses a different architecture. Instead of replacing the dense FFN with full experts as in Mixtral, it keeps the dense Mistral FFN and adds routed adapter experts through:
-
-```text
-model.layers.{bid}.mlp.moe_adapter.router.weight
-model.layers.{bid}.mlp.moe_adapter.experts.{xid}.adapter_down.weight
-model.layers.{bid}.mlp.moe_adapter.experts.{xid}.adapter_up.weight
-```
-
-Because these tensors have different semantics from Mixtral experts, I decided not to reuse the existing `FFN_*_EXP` tensor names. Instead, I introduced dedicated tensor names:
-
-```text
-blk.{bid}.ffn_moe_adapter_gate.weight
-blk.{bid}.ffn_moe_adapter_down_exps.weight
-blk.{bid}.ffn_moe_adapter_up_exps.weight
-```
-
-This preserves the distinction between full FFN experts and routed adapter experts while remaining consistent with the existing GGUF naming conventions.
+However, Sparsetral uses a different architecture. Instead of replacing the dense FFN with full experts as in Mixtral, it keeps the dense Mistral FFN and adds routed adapter experts. Because these tensors have different semantics from Mixtral experts, I decided not to reuse the existing `FFN_*_EXP` tensor names. This preserves the distinction between full FFN experts and routed adapter experts while remaining consistent with the existing GGUF naming conventions.
 
 - **Implementation:**
 
-- **`conversion/sparsetral.py`**
-  - Added buffering and stacking logic for Sparsetral adapter expert tensors.
-  - Matches Hugging Face tensors of the form:
+**`conversion/sparsetral.py`**
+     - Added buffering and stacking logic for Sparsetral adapter expert tensors.
+     - Matches Hugging Face tensors of the form:
     ```text
     model.layers.{bid}.mlp.moe_adapter.experts.{xid}.{adapter_down|adapter_up}.weight
     ```
-  - Buffers per-layer expert tensors until all `num_experts` are collected.
-  - Merges experts into a single 3D tensor using `torch.stack(..., dim=0)`.
-  - Emits merged tensor names:
+     - Buffers per-layer expert tensors until all `num_experts` are collected.
+     - Merges experts into a single 3D tensor using `torch.stack(..., dim=0)`.
+     - Emits merged tensor names:
     ```text
     model.layers.{bid}.mlp.moe_adapter.experts.adapter_down.weight
     model.layers.{bid}.mlp.moe_adapter.experts.adapter_up.weight
     ```
-  - Added validation to ensure no incomplete expert buffers remain after conversion.
+     - Added validation to ensure no incomplete expert buffers remain after conversion.
 
-- **`gguf-py/gguf/constants.py`**
-  - Added new GGUF tensor identifiers:
-    - `FFN_MOE_ADAPTER_GATE`
-    - `FFN_MOE_ADAPTER_DOWN`
-    - `FFN_MOE_ADAPTER_UP`
+**`gguf-py/gguf/constants.py`**
+  - Added new GGUF tensor identifiers: `FFN_MOE_ADAPTER_GATE`, `FFN_MOE_ADAPTER_DOWN`, `FFN_MOE_ADAPTER_UP`
   - Registered corresponding GGUF tensor names:
     ```text
     blk.{bid}.ffn_moe_adapter_gate.weight
@@ -369,24 +345,21 @@ This preserves the distinction between full FFN experts and routed adapter exper
     blk.{bid}.ffn_moe_adapter_up_exps.weight
     ```
 
-- **`gguf-py/gguf/tensor_mapping.py`**
+**`gguf-py/gguf/tensor_mapping.py`**
   - Added Hugging Face → GGUF mappings:
-    - `moe_adapter.router` → `FFN_MOE_ADAPTER_GATE`
-    - merged `adapter_down` → `FFN_MOE_ADAPTER_DOWN`
-    - merged `adapter_up` → `FFN_MOE_ADAPTER_UP`
+    `moe_adapter.router` → `FFN_MOE_ADAPTER_GATE`
+    merged `adapter_down` → `FFN_MOE_ADAPTER_DOWN`
+    merged `adapter_up` → `FFN_MOE_ADAPTER_UP`
 
-- **`src/llama-arch.h`**
-  - Added corresponding C++ tensor enums:
-    - `LLM_TENSOR_FFN_MOE_ADAPTER_GATE`
-    - `LLM_TENSOR_FFN_MOE_ADAPTER_DOWN`
-    - `LLM_TENSOR_FFN_MOE_ADAPTER_UP`
+**`src/llama-arch.h`**
+  - Added corresponding C++ tensor enums: `LLM_TENSOR_FFN_MOE_ADAPTER_GATE`, `LLM_TENSOR_FFN_MOE_ADAPTER_DOWN`, `LLM_TENSOR_FFN_MOE_ADAPTER_UP`
 
-- **`src/llama-arch.cpp`**
+**`src/llama-arch.cpp`**
   - Registered the corresponding GGUF tensor names for the new adapter tensors.
 
-- **Design Decision**
+- **Naming Decision**
 
-  The new tensor names follow existing llama.cpp naming conventions:
+The new tensor names follow existing llama.cpp naming conventions:
 
   - `blk.{bid}` for per-layer tensors.
   - `ffn_` because the tensors belong to the feed-forward (MLP) module.
@@ -394,9 +367,9 @@ This preserves the distinction between full FFN experts and routed adapter exper
   - `gate`, `down`, and `up` follow existing projection terminology.
   - `_exps` is consistent with existing expert-stacked tensor naming.
 
-### Week 5 Progress
+Dedicated names are used instead of the existing FFN_*_EXP tensors because Sparsetral adapters are added to the dense FFN output; they are not replacement-style full FFN experts like Mixtral.
 
-#### `adapter_dim` metadata flow
+#### Add Adapter-Dimension Metadata
 
 - **Description:** I added GGUF metadata support for Sparsetral's adapter bottleneck size. Sparsetral adapter experts are not full FFN experts. Each adapter uses a low-rank bottleneck:
 
@@ -405,17 +378,12 @@ This preserves the distinction between full FFN experts and routed adapter exper
     4096        -> 512         -> 4096
 ```
 
-The loader needs adapter_dim to allocate the expert-stacked adapter tensors with the correct shapes:
+The loader needs `adapter_dim` to allocate the expert-stacked adapter tensors with the correct shapes:
 
 ```PowerShell
 blk.{bid}.ffn_moe_adapter_down_exps.weight  { n_embd, adapter_dim, n_expert }
 blk.{bid}.ffn_moe_adapter_up_exps.weight    { adapter_dim, n_embd, n_expert }
 ```
-
-- **Implementation**:
-      - Added a GGUF metadata key for the adapter bottleneck dimension.
-      - Wrote the value from Sparsetral config: `adapter_dim = 512`
-      - Read the metadata into C++ model hparams so tensor loading can use it.
 
 - **Validation**:
 
@@ -434,6 +402,11 @@ Conversion completed successfully:
 ```
 
 This confirms the full model shards are available and the converter can export a real GGUF, not only metadata.
+
+- **Current limitations**
+Although conversion succeeded, llama.cpp could not yet load the model correctly. The runtime treated every model with `expert_count > 0` as a full Mixtral-style MoE model.
+
+The next milestone was to implement a dedicated sparse-adapter loading path.
 
 #### C++ tensor loading support
 - **Description**:
@@ -527,16 +500,71 @@ The next step is to update the LLaMA FFN graph so it computes the dense FFN outp
 
 #### Implement the Sparsetral sparse-adapter loading path
 
-This is the checkpoint between GGUF conversion support and full inference support: the model now converts to GGUF with adapter metadata and loads successfully instead of being mistaken for a full Mixtral-style MoE model.
+After completing GGUF conversion, I implemented C++ runtime support for loading Sparsetral's dense FFN and routed adapter tensors. This is the checkpoint between GGUF conversion support and full inference support: the model now converts to GGUF with adapter metadata and loads successfully instead of being mistaken for a full Mixtral-style MoE model.
 
 <img width="1333" height="748" alt="image" src="https://github.com/user-attachments/assets/5b3e6009-a696-40de-9d83-a052e8b56c1e" />
 
 
 <img width="1333" height="801" alt="image" src="https://github.com/user-attachments/assets/86506fd1-79ef-4dd8-a9aa-984ab595ec1b" />
 
+**Observing Errors:**
+
+The original LLaMA loader used two paths:
+
+```
+if n_expert == 0:
+    load dense FFN
+else:
+    load full MoE FFN
+```
+
+Because Sparsetral reports:
+
+```
+expert_count = 16
+```
+
+the runtime incorrectly selected the full-MoE path and attempted to load:
+
+```
+blk.0.ffn_gate_inp.weight
+blk.0.ffn_gate_exps.weight
+blk.0.ffn_down_exps.weight
+blk.0.ffn_up_exps.weight
+```
+
+Loading failed with:
+
+```
+missing tensor 'blk.0.ffn_gate_inp.weight'
+```
+
+Sparsetral instead contains both dense FFN tensors and sparse-adapter tensors:
+
+```
+blk.0.ffn_gate.weight
+blk.0.ffn_down.weight
+blk.0.ffn_up.weight
+blk.0.ffn_moe_adapter_gate.weight
+blk.0.ffn_moe_adapter_down_exps.weight
+blk.0.ffn_moe_adapter_up_exps.weight
+```
+
 **Implementation:**
 
-I added GGUF metadata for Sparsetral's adapter bottleneck dimension. Sparsetral uses routed low-rank adapters with shape hidden_size -> adapter_dim -> hidden_size, so C++ needs adapter_dim to allocate the adapter expert tensors correctly. 
+I added a third loading path:
+
+```
+if sparse adapter model:
+    load dense FFN
+    load sparse-adapter router/down/up tensors
+else if n_expert == 0:
+    load dense FFN
+else:
+    load full MoE FFN
+```
+
+The following files were updated:
 
 - `gguf-py/gguf/constants.py`
 
@@ -556,55 +584,71 @@ Mapped Sparsetral HF tensor names to the new GGUF tensor names: ffn_moe_adapter_
 
 - `src/llama-arch.h and src/llama-arch.cpp`
 
-Added C++ metadata and tensor enum entries, GGUF name strings, and tensor op metadata for the sparse-adapter tensors.
+Added C++ metadata and tensor enum entries, GGUF name strings, and tensor op metadata for the sparse-adapter tensors:
+
+```
+FFN_MOE_ADAPTER_GATE -> GGML_OP_MUL_MAT
+FFN_MOE_ADAPTER_DOWN -> GGML_OP_MUL_MAT_ID
+FFN_MOE_ADAPTER_UP -> GGML_OP_MUL_MAT_ID
+```
 
 - `src/llama-hparams.h`
 
-Added n_ff_adapter to store the adapter bottleneck dimension from GGUF metadata.
+Added `n_ff_adapter` to store the adapter bottleneck dimension from GGUF metadata.
 
 - `src/llama-model.h`
 
-Added three tensor fields to llama_layer for the adapter router, down projection, and up projection.
+Added three tensor fields to `llama_layer` for the adapter router, down projection, and up projection.
 
 - `src/models/llama.cpp`
 
-Added a third loading path for sparse adapter MoE models. Sparsetral has expert_count > 0, but it is not a full MoE model. The new path loads the dense FFN tensors plus optional sparse-adapter tensors, avoiding the previous failure where llama.cpp looked for blk.0.ffn_gate_inp.weight.
+Added a third loading path for sparse adapter MoE models. Sparsetral has `expert_count > 0`, but it is not a full MoE model. The new path loads the dense FFN tensors plus optional sparse-adapter tensors, avoiding the previous failure where `llama.cpp` looked for `blk.0.ffn_gate_inp.weight`.
 
-**Results**
+**Validation**
 
-The updated converter successfully exported the full local Sparsetral model:
+I used a convert-build-load validation loop:
 
+1. Reconverted the complete Sparsetral checkpoint with the adapter metadata.
+2. Built an x64 Release binary:
 ```
-  n_tensors = 387, total_size = 18.8G
-  Model successfully exported to sparsetral-new.gguf
+cmake -B build-msvc-x64 -DCMAKE_BUILD_TYPE=Release 
+cmake --build build-msvc-x64 --config Release
 ```
-
-The new x64 build successfully loaded sparsetral-new.gguf and ran the test prompt:
+3. Confirmed the converter exported a complete GGUF:
 ```
-  .\build-msvc-x64\bin\llama-cli.exe -m .\sparsetral-new.gguf -p "Hello" -n 16
+n_tensors = 387, total_size = 18.8G
+Model successfully exported to sparsetral-new.gguf
 ```
-
-This confirms the loader now recognizes the sparse-adapter layout and no longer falls into the full MoE loading path.
-
-**Validation:**
-
-I validated the work through a convert-build-load loop:
-
-  1. Rebuilt llama.cpp with the new C++ metadata and tensor loading changes using an x64 MSVC build.
-
-  2. Reconverted the Sparsetral model after adding the new adapter_feed_forward_length metadata.
-
-  3. Confirmed the converter produced a real GGUF with all tensors, not just metadata.
-  4. Ran llama-cli against the new GGUF and verified the previous loader error was fixed.
-
-The previous failure was:
-
+4. Tested loading with:
 ```
-  missing tensor 'blk.0.ffn_gate_inp.weight'
+.\build-msvc-x64\bin\llama-cli.exe -m .\sparsetral-new.gguf -p "Hello" -n 16
 ```
+The previous error `missing tensor 'blk.0.ffn_gate_inp.weight'` is now resolved.
 
-That error is now resolved. Current checkpoint validates loading support only; the next contribution step is wiring the sparse-adapter tensors into the FFN graph so inference uses the adapters, not just the dense Mistral FFN.
+**Current Checkpoint**
 
+The current implementation confirms that:
+
+- the full Sparsetral checkpoint converts to GGUF;
+- adapter metadata and tensors are preserved;
+- the C++ loader recognizes the sparse-adapter layout;
+- dense FFN and adapter tensors are allocated successfully;
+- the model no longer enters the incorrect full-MoE loading path.
+
+**Current Limitation**
+
+Runtime loading is now supported, but correct sparse-adapter inference is not yet implemented.
+
+The adapter tensors are loaded into memory, but the FFN computation graph still needs to:
+
+- compute the normal dense FFN output;
+- calculate sparse-adapter router logits;
+- select the top-k adapter experts;
+- apply the selected adapter_down and adapter_up projections;
+- weight and sum the adapter outputs;
+- add the routed adapter contribution to the dense FFN output.
+
+The next milestone is therefore sparse-adapter graph construction and numerical validation against the Hugging Face implementation.
 
 
 ### Code Changes
