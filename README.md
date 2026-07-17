@@ -588,13 +588,13 @@ In `src\models\llama.cpp`, I did not modify any graph helper or shared ggml oper
 
 The normalized FFN input is stored separately:
 
-```
+```cpp
   ggml_tensor * ffn_norm = cur;
 ```
 
 This is necessary because Sparsetral routes tokens using the input to the dense MLP, not the dense MLP output. Equivalent reference operation:
 
-```
+```cpp
   router_logits = router(ffn_norm)
 ```
 
@@ -602,7 +602,7 @@ This is necessary because Sparsetral routes tokens using the input to the dense 
 
 The normal LLaMA/Mistral FFN is evaluated first:
 
-```
+```cpp
   ggml_tensor * dense_out = build_ffn(ffn_norm,
           model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
           model.layers[il].ffn_up_s,
@@ -624,7 +624,7 @@ The dense FFN remains active because Sparsetral adapters augment it instead of r
 
 The adapter path is activated only when the layer contains an adapter router:
 
-```
+```cpp
   if (model.layers[il].ffn_moe_adapter_gate != nullptr) {
       ggml_tensor * router_logits = build_lora_mm(
               model.layers[il].ffn_moe_adapter_gate, ffn_norm);
@@ -638,7 +638,7 @@ The adapter path is activated only when the layer contains an adapter router:
 
 The existing MoE helper is reused to route and evaluate the adapter experts:
 
-```
+```cpp
   ggml_tensor * adapter_out = build_moe_ffn(
           dense_out,
           nullptr,
@@ -660,7 +660,7 @@ The existing MoE helper is reused to route and evaluate the adapter experts:
 
 The arguments represent:
 
-```
+```tex
   Expert input:       dense_out
   First projection:   adapter_down
   Activation:         GELU
@@ -671,7 +671,7 @@ The arguments represent:
 
 This produces:
 
-```
+```cpp
   adapter_out = sum(weight_i * adapter_up_i(GELU(adapter_down_i(dense_out))))
 ```
 
@@ -679,14 +679,14 @@ This produces:
 
 The routed adapter output is added to the dense FFN output:
 
-```
+```cpp
   cur = ggml_add(ctx0, dense_out, adapter_out);
   cb(cur, "ffn_out", il);
 ```
 
 The complete computation is therefore:
 
-```
+```cpp
   router_logits = router(ffn_norm)
   dense_out     = dense_ffn(ffn_norm)
   adapter_out   = routed_adapter_moe(dense_out, router_logits)
