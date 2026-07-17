@@ -564,6 +564,133 @@ The adapter tensors are loaded into memory, but the FFN computation graph still 
 
 The next milestone is therefore sparse-adapter graph construction and numerical validation against the Hugging Face implementation.
 
+### Week 7 Progress
+
+#### Implement routed sparse-adapter inference graph
+
+**Observing Errors:**
+
+The Sparsetral conversion and tensor-loading paths were implemented successfully. The converted GGUF could be loaded, and inference could run without reporting missing tensors. However, the sparse-adapter tensors were only loaded into memory. They were not connected to the computation graph. Consequently, inference executed the ordinary dense Mistral FFN and ignored:
+
+```
+  blk.*.ffn_moe_adapter_gate.weight
+  blk.*.ffn_moe_adapter_down_exps.weight
+  blk.*.ffn_moe_adapter_up_exps.weight
+```
+
+The model therefore behaved like its dense base model rather than Sparsetral. Successful generation at this stage only validated conversion and loading, not inference correctness.
+
+**Implementation**
+
+In `src\models\llama.cpp`, I did not modify any graph helper or shared ggml operator. I only reused the existing `build_ffn()`, `build_lora_mm()`, and `build_moe_ffn()` infrastructure.
+
+1. Preserve the Router Input
+
+The normalized FFN input is stored separately:
+
+```
+  ggml_tensor * ffn_norm = cur;
+```
+
+This is necessary because Sparsetral routes tokens using the input to the dense MLP, not the dense MLP output. Equivalent reference operation:
+
+```
+  router_logits = router(ffn_norm)
+```
+
+2. Compute the Dense FFN Output
+
+The normal LLaMA/Mistral FFN is evaluated first:
+
+```
+  ggml_tensor * dense_out = build_ffn(ffn_norm,
+          model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+          model.layers[il].ffn_up_s,
+          model.layers[il].ffn_gate, model.layers[il].ffn_gate_b,
+          model.layers[il].ffn_gate_s,
+          model.layers[il].ffn_down, model.layers[il].ffn_down_b,
+          model.layers[il].ffn_down_s,
+          NULL,
+          LLM_FFN_SILU, LLM_FFN_PAR, il);
+
+  cb(dense_out, "ffn_out", il);
+
+  cur = dense_out;
+```
+
+The dense FFN remains active because Sparsetral adapters augment it instead of replacing it.
+
+3. Compute Router Logits
+
+The adapter path is activated only when the layer contains an adapter router:
+
+```
+  if (model.layers[il].ffn_moe_adapter_gate != nullptr) {
+      ggml_tensor * router_logits = build_lora_mm(
+              model.layers[il].ffn_moe_adapter_gate, ffn_norm);
+
+      cb(router_logits, "ffn_moe_adapter_logits", il);
+```
+
+`build_lora_mm()` performs the router matrix multiplication. The input is ffn_norm, matching router_hidden_states = x in the Sparsetral reference implementation.
+
+4. Evaluate the Selected Adapter Experts
+
+The existing MoE helper is reused to route and evaluate the adapter experts:
+
+```
+  ggml_tensor * adapter_out = build_moe_ffn(
+          dense_out,
+          nullptr,
+          model.layers[il].ffn_moe_adapter_down,
+          nullptr,
+          model.layers[il].ffn_moe_adapter_up,
+          nullptr,
+          n_expert,
+          n_expert_used,
+          LLM_FFN_GELU,
+          true,
+          hparams.expert_weights_scale,
+          LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+          il,
+          router_logits);
+
+  cb(adapter_out, "ffn_moe_adapter_out", il);
+```
+
+The arguments represent:
+
+  Expert input:       dense_out
+  First projection:   adapter_down
+  Activation:         GELU
+  Second projection:  adapter_up
+  Routing:            softmax followed by top-k
+  Weight handling:    normalize selected expert weights
+
+This produces:
+
+```
+  adapter_out = sum(weight_i * adapter_up_i(GELU(adapter_down_i(dense_out))))
+```
+
+5. Add the Adapter Contribution
+
+The routed adapter output is added to the dense FFN output:
+
+```
+  cur = ggml_add(ctx0, dense_out, adapter_out);
+  cb(cur, "ffn_out", il);
+```
+
+The complete computation is therefore:
+
+  router_logits = router(ffn_norm)
+  dense_out     = dense_ffn(ffn_norm)
+  adapter_out   = routed_adapter_moe(dense_out, router_logits)
+  ffn_out       = dense_out + adapter_out
+
+This is equivalent to the reference implementation because the selected routing weights are normalized to sum to one.
+
 ### Code Changes
 
 - **Files modified:** [List]
