@@ -660,12 +660,14 @@ The existing MoE helper is reused to route and evaluate the adapter experts:
 
 The arguments represent:
 
+```
   Expert input:       dense_out
   First projection:   adapter_down
   Activation:         GELU
   Second projection:  adapter_up
   Routing:            softmax followed by top-k
   Weight handling:    normalize selected expert weights
+```
 
 This produces:
 
@@ -684,11 +686,12 @@ The routed adapter output is added to the dense FFN output:
 
 The complete computation is therefore:
 
+```
   router_logits = router(ffn_norm)
   dense_out     = dense_ffn(ffn_norm)
   adapter_out   = routed_adapter_moe(dense_out, router_logits)
   ffn_out       = dense_out + adapter_out
-
+```
 This is equivalent to the reference implementation because the selected routing weights are normalized to sum to one.
 
 ### Code Changes
