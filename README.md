@@ -694,6 +694,26 @@ The complete computation is therefore:
 ```
 This is equivalent to the reference implementation because the selected routing weights are normalized to sum to one.
 
+**Validation**
+I validated that the Sparsetral GGUF loads with the new sparse-adapter tensors present, and that llama.cpp can build and execute an inference graph using the modified LLaMA FFN path without crashing. This is a smoke test for graph construction and runtime execution, not a correctness test against the reference Sparsetral implementation.
+
+Command:
+
+```
+  cd D:\Test\llama.cpp
+  cmake -S . -B build-amd64-test -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+  cmake --build build-amd64-test -j --target llama-cli
+  .\build-amd64-test\bin\llama-cli.exe -m .\sparsetral-new.gguf -p "Hello" -n 32 -ngl 0
+```
+
+Result:
+
+<img width="1855" height="712" alt="image" src="https://github.com/user-attachments/assets/790381e5-51d0-4a68-aef5-b6a091e8ab6a" />
+
+
+
+
+  
 ### Code Changes
 
 - **Files modified:** [List]
