@@ -695,6 +695,7 @@ The complete computation is therefore:
 This is equivalent to the reference implementation because the selected routing weights are normalized to sum to one.
 
 **Validation**
+
 I validated that the Sparsetral GGUF loads with the new sparse-adapter tensors present, and that llama.cpp can build and execute an inference graph using the modified LLaMA FFN path without crashing. This is a smoke test for graph construction and runtime execution, not a correctness test against the reference Sparsetral implementation.
 
 Command:
@@ -709,6 +710,93 @@ Command:
 Result:
 
 <img width="1855" height="712" alt="image" src="https://github.com/user-attachments/assets/790381e5-51d0-4a68-aef5-b6a091e8ab6a" />
+
+I verified that the new sparse-adapter graph branch is actually exercised at runtime using `llama-debug` with `--verbose --tensor-filter "ffn_moe_adapter"`. The debug output showed `ffn_moe_adapter_logits` being computed from `blk.*.ffn_moe_adapter_gate.weight` and `ffn_norm`, followed by `ffn_moe_adapter_out`, confirming that the adapter router and adapter output nodes are present in the executed graph. This validates graph-path execution.
+
+Command: 
+
+```
+cmake --build build-amd64-test -j --target llama-debug
+.\build-amd64-test\bin\llama-debug.exe -m .\sparsetral-new.gguf -p "Hello" -n 1 -ngl 0 --verbose --tensor-filter "ffn_moe_adapter"
+```
+
+Result
+
+<img width="1818" height="706" alt="image" src="https://github.com/user-attachments/assets/b88d190d-57a7-4277-b592-e7291b6689dc" />
+
+I validated the llama.cpp Sparsetral computation graph by comparing final next-token logits against the Hugging Face reference implementation on the same fixed prompt.
+
+The local machine could load and run the GGUF model with llama.cpp, but loading the full Hugging Face BF16 checkpoint locally required more memory than was practical. To get a reliable reference output, I ran the Hugging Face logits generation on Modal with a GPU-backed environment, then copied the generated reference logits back to the local data/ directory.
+
+This test validates numerical behavior at the model-output level. If Hugging Face Sparsetral model and llama.cpp model produce similar logits for the same prompt, it means both implementations are doing nearly the same computation through the model: attention, dense FFN, sparse adapter routing, adapter matmuls, residual adds, and final output projection.
+
+Command
+
+* Set the shared prompt and paths:
+
+```PowerShell
+  cd D:\Test\llama.cpp
+
+  $env:MODEL_TESTING_PROMPT = "Hello world today"
+  $env:MODEL_PATH = "D:\Test\llama.cpp\models\sparsetral-minimal"
+  $env:CONVERTED_MODEL = "D:\Test\llama.cpp\sparsetral-new.gguf
+```
+
+* Run Hugging Face reference logits on Modal:
+
+```PowerShell
+  modal run .\local_modal_hf_logits.py --prompt "Hello world today"
+```
+
+This produced:
+
+```
+  data\pytorch-sparsetral-minimal.bin
+  data\pytorch-sparsetral-minimal-tokens.bin
+  data\pytorch-sparsetral-minimal.txt
+  data\pytorch-sparsetral-minimal-prompt.txt
+```
+
+* Run llama.cpp logits locally:
+
+```PowerShell
+  .\build-amd64-test\bin\llama-debug.exe `
+    -m .\sparsetral-new.gguf `
+    -p "Hello world today" `
+    --save-logits `
+    -ngl 0
+```
+
+This produced:
+
+```
+  data\llamacpp-sparsetral-new.bin
+  data\llamacpp-sparsetral-new-tokens.bin
+  data\llamacpp-sparsetral-new.txt
+  data\llamacpp-sparsetral-new-prompt.txt
+```
+
+* Compare logits:
+
+```PowerShell
+  .\.venv\Scripts\python.exe .\examples\model-conversion\scripts\causal\compare-logits.py
+```
+
+Results: Top logits were closely aligned between Hugging Face and llama.cpp.
+
+* HF reference generation on Modal:
+
+<img width="1041" height="781" alt="image" src="https://github.com/user-attachments/assets/c4f3cf73-194b-4590-9221-d36987e96286" />
+
+* llama.cpp logits generation:
+
+<img width="1053" height="840" alt="image" src="https://github.com/user-attachments/assets/20169145-79d1-47ef-a7cc-2c9d38d2498f" />
+
+* Final comparison:
+
+<img width="1054" height="687" alt="image" src="https://github.com/user-attachments/assets/3379a591-dd02-43c1-8c19-10cd24172a9b" />
+
+
 
 
 
