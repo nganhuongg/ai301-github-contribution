@@ -796,8 +796,43 @@ Results: Top logits were closely aligned between Hugging Face and llama.cpp.
 
 <img width="1054" height="687" alt="image" src="https://github.com/user-attachments/assets/3379a591-dd02-43c1-8c19-10cd24172a9b" />
 
+I validated whether the dense model path works by testing inference on an available dense model `stories15M-q4_0.gguf`. `stories15M-q4_0.gguf` is a tiny toy model, not a knowledge-capable model. For this test, correctness means the dense GGUF loads, no Sparsetral adapter tensors are required, no MoE/full-expert tensors are required, generation runs without graph/build/runtime errors
 
+Command
 
+```
+   ctest --test-dir build-amd64-test -R test-download-model --output-on-failure
+   $DENSE="D:\Test\llama.cpp\build-amd64-test\tinyllamas\stories15M-q4_0.gguf"
+   .\build-amd64-test\bin\llama-cli.exe `
+       -m $DENSE `
+       -p "Once upon a time" `
+       -n 32 `
+       -ngl 0 `
+       --temp 0 `
+       --seed 1234
+```
+
+Result
+
+<img width="873" height="607" alt="image" src="https://github.com/user-attachments/assets/c1fbefbf-c085-44f2-808f-4bbc8165ef81" />
+
+I validated that MoE model's computation graph still worked by testing on the full-MoE `OLMoE-1B-7B-0125-GGUF:Q2_K`.  Command loaded real MoE GGUF through -hf and generated without graph/runtime errors. This test proves that Sparsetral changes did not break the existing full-MoE inference path.
+
+Command
+
+```
+.\build-amd64-test\bin\llama-cli.exe `
+    -hf allenai/OLMoE-1B-7B-0125-GGUF:Q2_K `
+    -p "Once upon a time" `
+    -n 32 `
+    -ngl 0 `
+    --temp 0 `
+    --seed 1234
+```
+
+Result
+
+<img width="1732" height="712" alt="image" src="https://github.com/user-attachments/assets/377981d6-6c5c-4c6d-af71-1a37064ca56c" />
 
 
 
