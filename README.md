@@ -834,6 +834,38 @@ Result
 
 <img width="1732" height="712" alt="image" src="https://github.com/user-attachments/assets/377981d6-6c5c-4c6d-af71-1a37064ca56c" />
 
+I also validated the computation graph after quantization. Quantization proves the new sparse-adapter tensors are accepted by `llama-quantize`, keep valid 3D expert shapes, and still run through the sparse-adapter graph.
+
+Command
+
+```powershell
+cmd /c "call ""C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\VsDevCmd.bat"" -arch=x64 -host_arch=x64 && cmake --build build-amd64-test -j --target llama-quantize"
+
+.\build-amd64-test\bin\llama-quantize.exe ` .\sparsetral-new.gguf ` .\sparsetral-q8_0.gguf ` Q8_0
+
+.\build-amd64-test\bin\llama-quantize.exe ` .\sparsetral-new.gguf ` .\sparsetral-q4_k_m.gguf ` Q4_K_M
+```
+
+Result
+
+<img width="913" height="302" alt="Screenshot 2026-07-20 081811" src="https://github.com/user-attachments/assets/262da4a1-ac97-4d0a-bae4-ca10e475a6d4" />
+
+<img width="863" height="182" alt="Screenshot 2026-07-20 082010" src="https://github.com/user-attachments/assets/0f8e484e-52f5-49ff-bad2-2c96cb288cd4" />
+
+I ran focused CTest regression suite:
+
+```powershell
+  ctest --test-dir build-amd64-test --output-on-failure -R "test-gguf|test-model-load-cancel|test-backend-sampler|test-save-load-state|test-thread-safety"
+```
+
+Result: 7/7 passed.
+
+<img width="874" height="679" alt="image" src="https://github.com/user-attachments/assets/66ef1b5d-7ba3-45c0-9c48-3d809712d501" />
+
+
+This validates that the sparse-adapter changes did not regress the existing GGUF format handling, model load/cancel path, backend sampler path, save/load state behavior, or threaded inference behavior. These tests are complementary to the Sparsetral-specific validation: they do not prove Sparsetral logit correctness, but they verify the shared llama.cpp infrastructure touched or depended on by the change still behaves correctly.
+
+
 
 
   
