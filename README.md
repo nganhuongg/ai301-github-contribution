@@ -6,7 +6,7 @@
 
 **Issue:** [Support for Sparse MoE models like Camelidae and Sparsetral](https://github.com/ggml-org/llama.cpp/issues/5365)  
 
-**Status:** Phase III - In Progress
+**Status:** Phase III - Completed
 
 ---
 
@@ -166,20 +166,427 @@ Before submitting a PR, I will verify that:
 
 ## Testing Strategy
 
+The testing strategy validates Sparse MoE support at multiple levels. It is divided into conversion, loading, graph execution, numerical correctness, regression, and quantization validation. The primary test target is Sparsetral. Existing dense and full-MoE models are also tested to ensure that the new sparse-adapter path does not break existing inference behavior. Detailed test will be discussed in the **Implementation Notes**.
+
 ### Unit Tests
 
-- [ ] Test case 1: [Description]
-- [ ] Test case 2: [Description]
-- [ ] Test case 3: [Description]
+#### 1. Architecture Registration Test
+
+**Purpose:** Verify that the converter recognizes the custom Hugging Face architecture string and selects the Sparsetral conversion path.
+
+**Input architecture:**
+
+```text
+modeling_sparsetral.MistralForCausalLM
+```
+
+**Procedure:**
+
+```powershell
+python convert_hf_to_gguf.py models/sparsetral-minimal --outfile sparsetral.gguf
+```
+
+**Expected result:**
+
+The converter must no longer fail with:
+
+```text
+Model modeling_sparsetral.MistralForCausalLM is not supported
+```
+
+It should proceed to GGUF metadata and tensor conversion.
+
+**Result:** Passed.
+
+**Limitation:** This test proves architecture registration only. It does not prove that tensors are converted correctly.
+
+#### 2. Sparse-Adapter Metadata Test
+
+**Purpose:** Verify that Sparsetral configuration fields are normalized into GGUF metadata.
+
+The required fields are:
+
+```text
+num_experts
+topk
+adapter_dim
+router scoring function
+```
+
+**Expected GGUF values:**
+
+```text
+expert count = 16
+experts used count = 4
+expert score gating function = softmax
+adapter feed-forward length = adapter_dim
+```
+
+The C++ loader should read these values into:
+
+```text
+n_expert
+n_expert_used
+n_ff_adapter
+```
+
+**Result:** Passed.
+
+**Limitation:** This validates metadata consistency between the Hugging Face configuration, GGUF writer, and C++ reader. It does not validate tensor values.
+
+#### 3. Adapter Expert Stacking Test
+
+**Purpose:** Verify that individual Hugging Face adapter expert tensors are collected and merged into the correct expert-stacked GGUF tensors.
+
+**Hugging Face input tensors:**
+
+```text
+model.layers.{bid}.mlp.moe_adapter.experts.{xid}.adapter_down.weight
+model.layers.{bid}.mlp.moe_adapter.experts.{xid}.adapter_up.weight
+```
+
+**Expected merged GGUF tensors:**
+
+```text
+blk.{bid}.ffn_moe_adapter_down_exps.weight
+blk.{bid}.ffn_moe_adapter_up_exps.weight
+```
+
+**Expected conceptual shapes:**
+
+```text
+adapter_down: { n_embd, adapter_dim, n_expert }
+adapter_up:   { adapter_dim, n_embd, n_expert }
+```
+
+**Checks:**
+
+- all expected expert IDs are collected;
+- no layer has an incomplete expert buffer;
+- expert stacking order is deterministic;
+- the stacked expert dimension equals `num_experts`;
+- no individual expert tensor is silently omitted.
+
+**Expected result:**
+
+```text
+n_tensors = 387
+total_size = 18.8G
+```
+
+**Result:** Passed.
+
+**Limitation:** This validates tensor presence, naming, stacking, and shape. It does not prove numerical equivalence.
 
 ### Integration Tests
 
-- [ ] Integration scenario 1
-- [ ] Integration scenario 2
+#### 4. Full GGUF Conversion Test
+
+**Purpose:** Validate the complete Hugging Face-to-GGUF conversion path using the full Sparsetral checkpoint.
+
+**Command:**
+
+```powershell
+python convert_hf_to_gguf.py `
+    .\models\sparsetral-minimal `
+    --outfile .\sparsetral-new.gguf
+```
+
+**Expected result:**
+
+```text
+expert count = 16
+experts used count = 4
+expert score gating function = softmax
+n_tensors = 387
+Model successfully exported
+```
+
+**Result:** Passed.
+
+This verifies that architecture registration, metadata writing, tensor mapping, expert buffering, expert stacking, and GGUF serialization work together.
+
+#### 5. Sparse-Adapter Model Loading Test
+
+**Purpose:** Verify that the C++ loader distinguishes a sparse-adapter model from a traditional full-MoE model.
+
+Before the fix, the loader incorrectly interpreted:
+
+```text
+expert_count > 0
+```
+
+as proof that the model was a full MoE and attempted to load:
+
+```text
+ffn_gate_inp
+ffn_gate_exps
+ffn_up_exps
+ffn_down_exps
+```
+
+The sparse-adapter path must instead load:
+
+```text
+Dense FFN:
+ffn_gate
+ffn_up
+ffn_down
+
+Sparse adapter:
+ffn_moe_adapter_gate
+ffn_moe_adapter_down_exps
+ffn_moe_adapter_up_exps
+```
+
+**Command:**
+
+```powershell
+.\build-amd64-test\bin\llama-cli.exe `
+    -m .\sparsetral-new.gguf `
+    -p "Hello" `
+    -n 16 `
+    -ngl 0
+```
+
+**Expected result:**
+
+- no missing tensor error;
+- dense FFN tensors load successfully;
+- sparse-adapter tensors load successfully;
+- the model reaches graph construction.
+
+**Result:** Passed.
+
+**Limitation:** Successful loading proves compatibility between the converted GGUF and the C++ runtime. It does not prove that adapter tensors are used during inference.
+
+#### 6. Sparse-Adapter Graph Execution Test
+
+**Purpose:** Verify that the adapter router and adapter expert branch are present in the executed computation graph.
+
+A normal generation command is insufficient because generation may succeed while the adapter tensors are ignored.
+
+**Command:**
+
+```powershell
+.\build-amd64-test\bin\llama-debug.exe `
+    -m .\sparsetral-new.gguf `
+    -p "Hello" `
+    -n 1 `
+    -ngl 0 `
+    --verbose `
+    --tensor-filter "ffn_moe_adapter"
+```
+
+**Expected graph nodes:**
+
+```text
+ffn_moe_adapter_logits
+ffn_moe_adapter_out
+```
+
+The debug trace should show that `ffn_moe_adapter_logits` depends on:
+
+```text
+ffn_moe_adapter_gate.weight
+ffn_norm
+```
+
+and that `ffn_moe_adapter_out` is evaluated before being added to the dense FFN output.
+
+**Result:** Passed.
+
+**Limitation:** This proves that the sparse-adapter branch executes. It does not prove that its numerical output matches Hugging Face.
 
 ### Manual Testing
 
-[What you tested manually and results]
+#### 7. Hugging Face Versus llama.cpp Logit Comparison
+
+**Purpose:** Validate end-to-end numerical correctness against the reference Sparsetral implementation.
+
+This is the strongest correctness test because it covers tokenization, embedding lookup, attention, dense FFN, router logits, top-k expert selection, adapter-down projection, GELU activation, adapter-up projection, routing-weight normalization, expert aggregation, residual additions, final output projection.
+
+**Test conditions:**
+
+```text
+Prompt: Hello world today
+Same tokenizer
+Same model weights
+Deterministic forward pass
+No sampling dependency
+```
+
+The Hugging Face reference logits were generated on Modal because loading the full BF16 checkpoint locally required more memory than was practical.
+
+**Hugging Face command:**
+
+```powershell
+modal run .\local_modal_hf_logits.py `
+    --prompt "Hello world today"
+```
+
+**llama.cpp command:**
+
+```powershell
+.\build-amd64-test\bin\llama-debug.exe `
+    -m .\sparsetral-new.gguf `
+    -p "Hello world today" `
+    --save-logits `
+    -ngl 0
+```
+
+**Comparison command:**
+
+```powershell
+.\.venv\Scripts\python.exe `
+    .\examples\model-conversion\scripts\causal\compare-logits.py
+```
+
+**Pass criteria:**
+
+The comparison should confirm:
+
+- matching token IDs;
+- matching vocabulary size;
+- closely aligned top-ranked logits;
+- matching top predicted tokens;
+- bounded numerical differences.
+
+**Result:** Passed at the model-output level. The top logits were closely aligned between Hugging Face and llama.cpp.
+
+#### 8. Dense-Model Regression Test
+
+**Purpose:** Ensure that adding the sparse-adapter branch does not change the ordinary dense FFN path.
+
+**Model:**
+
+```text
+stories15M-q4_0.gguf
+```
+
+**Command:**
+
+```powershell
+$DENSE="D:\Test\llama.cpp\build-amd64-test\tinyllamas\stories15M-q4_0.gguf"
+
+.\build-amd64-test\bin\llama-cli.exe `
+    -m $DENSE `
+    -p "Once upon a time" `
+    -n 32 `
+    -ngl 0 `
+    --temp 0 `
+    --seed 1234
+```
+
+**Expected result:**
+
+- the model loads successfully;
+- no sparse-adapter tensors are required;
+- no MoE tensors are required;
+- generation completes without graph or runtime errors.
+
+**Result:** Passed.
+
+**Limitation:** This is a regression smoke test. It does not evaluate language quality.
+
+#### 9. Existing Full-MoE Regression Test
+
+**Purpose:** Ensure that the new sparse-adapter branch does not break the existing full-MoE path.
+
+**Model:**
+
+```text
+allenai/OLMoE-1B-7B-0125-GGUF:Q2_K
+```
+
+**Command:**
+
+```powershell
+.\build-amd64-test\bin\llama-cli.exe `
+    -hf allenai/OLMoE-1B-7B-0125-GGUF:Q2_K `
+    -p "Once upon a time" `
+    -n 32 `
+    -ngl 0 `
+    --temp 0 `
+    --seed 1234
+```
+
+**Expected result:**
+
+- the full-MoE router path remains selected;
+- existing expert tensors load;
+- graph construction completes;
+- generation completes without errors.
+
+**Result:** Passed.
+
+This test is important because the implementation introduces a third FFN path:
+
+```text
+dense
+sparse adapter MoE
+full MoE
+```
+
+#### 10. Focused CTest Regression Suite
+
+**Purpose:** Validate shared llama.cpp infrastructure used or touched by the implementation.
+
+**Command:**
+
+```powershell
+ctest `
+    --test-dir build-amd64-test `
+    --output-on-failure `
+    -R "test-gguf|test-model-load-cancel|test-backend-sampler|test-save-load-state|test-thread-safety"
+```
+
+**Result:**
+
+```text
+7/7 tests passed
+```
+
+These tests cover:
+
+- GGUF handling;
+- model loading and cancellation;
+- backend sampling;
+- state save/load;
+- thread-safety behavior.
+
+**Limitation:** These tests protect shared infrastructure but do not validate Sparsetral-specific equations.
+
+#### 11. Sparse-Adapter Quantization Compatibility
+
+**Purpose:** Verify that the new adapter tensors are recognized by `llama-quantize`, preserve valid expert-stacked shapes, and remain executable after quantization.
+
+**Q8_0 command:**
+
+```powershell
+.\build-amd64-test\bin\llama-quantize.exe `
+    .\sparsetral-new.gguf `
+    .\sparsetral-q8_0.gguf `
+    Q8_0
+```
+
+**Q4_K_M command:**
+
+```powershell
+.\build-amd64-test\bin\llama-quantize.exe `
+    .\sparsetral-new.gguf `
+    .\sparsetral-q4_k_m.gguf `
+    Q4_K_M
+```
+
+**Expected result:**
+
+- quantization completes without unsupported-tensor errors;
+- router and expert tensors retain valid dimensions;
+- quantized models load successfully;
+- the sparse-adapter graph still executes.
+
+**Result:** Quantization completed successfully.
 
 ---
 
@@ -865,9 +1272,6 @@ Result: 7/7 passed.
 
 This validates that the sparse-adapter changes did not regress the existing GGUF format handling, model load/cancel path, backend sampler path, save/load state behavior, or threaded inference behavior. These tests are complementary to the Sparsetral-specific validation: they do not prove Sparsetral logit correctness, but they verify the shared llama.cpp infrastructure touched or depended on by the change still behaves correctly.
 
-
-
-
   
 ### Code Changes
 
@@ -895,11 +1299,61 @@ This validates that the sparse-adapter changes did not regress the existing GGUF
 
 ### Technical Skills Gained
 
-[What you learned technically]
+Through this contribution, I developed a much deeper understanding of GGML and computation-graph-based inference. I learned that llama.cpp does not execute a model as a sequence of high-level neural-network modules in the same way as PyTorch. Instead, it constructs a graph of tensor operations such as matrix multiplication, normalization, activation, expert routing, and residual addition. Each resulting tensor records the operation that produced it and its dependencies, allowing GGML to determine the correct execution order.
+
+I also learned how computation graphs support efficient local inference. Because GGML knows the dependencies and lifetimes of intermediate tensors, it can plan memory allocation, reuse temporary buffers when values are no longer needed, and dispatch operations to optimized backend kernels. This is especially important for large language models, where memory usage and memory bandwidth are often more restrictive than the arithmetic itself.
+
+Implementing Sparsetral helped me understand this process concretely. I traced how the normalized FFN input becomes the input to both the dense Mistral FFN and the sparse-adapter router. I then added graph nodes for router logits, top-k expert selection, expert-indexed adapter projections, weighted expert aggregation, and the final addition to the dense FFN output. This required understanding tensor shapes, GGML dimension ordering, broadcasting, graph callbacks, and operations such as `ggml_mul_mat`, `ggml_mul_mat_id`, `ggml_add`, and the existing `build_moe_ffn()` helper.
+
+A particularly clear demonstration of GGML’s effectiveness was the difference between running the reference model in PyTorch and running the converted model in `llama.cpp`. The original Hugging Face Sparsetral BF16 checkpoint required more memory than was available on my local machine, so I had to use a GPU-backed Modal environment to execute the PyTorch model and produce reference logits. In contrast, I was able to load and execute the Sparsetral GGUF computation graph locally through `llama.cpp`.
+
+This comparison gave me a practical understanding of why GGML and `llama.cpp` are effective for local inference. PyTorch is designed for flexible model development and training and retains a comparatively large runtime and memory footprint. GGML is designed around compact tensor representations, quantization, explicit memory planning, and optimized inference kernels. The fact that I needed remote infrastructure for the PyTorch reference but could run the GGML version locally showed the practical impact of those design decisions.
+
+Overall, the contribution helped me connect neural-network equations with their lower-level systems implementation. I moved from understanding an FFN or MoE only as a PyTorch module to understanding how its tensors are serialized, loaded, represented as computation nodes, allocated in memory, scheduled, and executed by an inference runtime.
 
 ### Challenges Overcome
 
-[What was hard and how you solved it]
+One challenge was building llama.cpp successfully on Windows. My initial attempts using VS Code did not work reliably because the required CMake generator, compiler toolchain, and build environment were not configured correctly. VS Code is primarily an editor and does not automatically provide the Microsoft C++ compiler or the environment variables required by CMake.
+
+To resolve this, I used the Visual Studio Developer Command Prompt, which initializes the Microsoft Visual C++ toolchain and makes tools such as cl, CMake, and Ninja available in the correct environment. I then configured and built the required `llama.cpp` targets using commands such as:
+
+```powershell
+cmake -S . -B build-amd64-test -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build-amd64-test -j --target llama-cli
+cmake --build build-amd64-test -j --target llama-debug
+cmake --build build-amd64-test -j --target llama-quantize
+```
+
+This allowed me to build the inference executable, inspect the GGML computation graph with `llama-debug`, and test quantization with `llama-quantize`. The issue was therefore not caused by the model implementation itself, but by the local compiler and build environment.
+
+Another major challenge was the local memory requirement of the Hugging Face Sparsetral checkpoint. `llama.cpp` could load and execute the converted GGUF model locally because GGUF and llama.cpp are designed for memory-efficient inference. However, loading the original Hugging Face BF16 model through PyTorch required substantially more memory than was available on my local machine.
+
+This created a problem for numerical validation. To verify correctness, I needed reference logits from the original PyTorch implementation and `llama.cpp` logits for the same prompt. Running both implementations locally was not practical because the PyTorch model could not fit within the available memory.
+
+I addressed this limitation by separating reference generation from local runtime testing. I used Modal to run the Hugging Face Sparsetral model in a GPU-backed environment with sufficient memory. The remote script loaded the original checkpoint, tokenized a fixed prompt, executed the PyTorch forward pass, and saved the reference token IDs and logits to binary files.
+
+```powershell
+modal run .\local_modal_hf_logits.py --prompt "Hello world today"
+```
+
+I then ran the converted GGUF model locally with llama-debug and saved the corresponding `llama.cpp` logits:
+
+```powershell
+.\build-amd64-test\bin\llama-debug.exe `
+    -m .\sparsetral-new.gguf `
+    -p "Hello world today" `
+    --save-logits `
+    -ngl 0
+```
+
+Finally, I compared the remotely generated Hugging Face logits with the locally generated llama.cpp logits:
+
+```powershell
+.\.venv\Scripts\python.exe `
+    .\examples\model-conversion\scripts\causal\compare-logits.py
+```
+
+This approach allowed me to perform end-to-end numerical validation despite the local hardware limitation. Rather than reducing the test scope to a generation smoke test, I used remote compute to preserve the original BF16 reference behavior and compared it directly with the `llama.cpp` implementation. The close alignment of the top logits provided evidence that the converted weights, dense FFN, sparse routing, selected adapter experts, residual additions, and final output projection were implemented consistently with the Hugging Face reference.
 
 ### What I'd Do Differently Next Time
 
