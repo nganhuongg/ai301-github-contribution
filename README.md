@@ -1283,15 +1283,57 @@ This validates that the sparse-adapter changes did not regress the existing GGUF
 
 ## Pull Request
 
-**PR Link:** [GitHub PR URL when submitted]
+**PR Link:** [PR Link](https://github.com/ggml-org/llama.cpp/pull/25971)
 
-**PR Description:** [Draft or final PR description - much of the content above can be adapted]
+**PR Description:**
+
+This PR adds initial support for the Sparsetral sparse-adapter MoE architecture described in #5365.
+
+The scope of this PR is intentionally limited to **Sparsetral**. It does not add or claim support for Camelidae or every sparse MoE architecture covered by the issue.
+
+Sparsetral differs from conventional full-MoE models such as Mixtral. It keeps the dense Mistral FFN active and adds routed lightweight adapter experts on top of the dense FFN output. Because of this, it cannot use the existing assumption that any model with `expert_count > 0` contains replacement-style full FFN experts.
+
+This PR adds the required support across conversion, GGUF metadata, tensor loading, graph construction, and quantization:
+
+- registers `modeling_sparsetral.MistralForCausalLM` in the Hugging Face-to-GGUF conversion pipeline;
+- reuses the existing LLaMA/Mistral conversion path for the dense backbone;
+- maps Sparsetral-specific configuration fields:
+  - `num_experts`;
+  - `topk`;
+  - `adapter_dim`;
+  - softmax router scoring;
+- adds dedicated GGUF tensor names for:
+  - the sparse-adapter router;
+  - expert-stacked `adapter_down` weights;
+  - expert-stacked `adapter_up` weights;
+- buffers and stacks individual Hugging Face adapter expert tensors into 3D GGUF tensors;
+- adds adapter bottleneck metadata required by the C++ loader;
+- adds a sparse-adapter loading path that loads both:
+  - the normal dense FFN tensors;
+  - the routed sparse-adapter tensors;
+- reuses the existing `build_ffn()`, `build_lora_mm()`, and `build_moe_ffn()` infrastructure to construct the Sparsetral inference graph;
+- computes routing from the normalized FFN input;
+- applies selected adapter experts to the dense FFN output;
+- adds the weighted sparse-adapter contribution to the dense FFN result;
+- registers the new tensor categories for quantization.
+
+The implemented FFN path is conceptually:
+
+```text
+ffn_norm      = RMSNorm(ffn_input)
+dense_out     = dense_ffn(ffn_norm)
+router_logits = adapter_router(ffn_norm)
+adapter_out   = routed_adapter_moe(dense_out, router_logits)
+ffn_out       = dense_out + adapter_out
+layer_out     = ffn_input + ffn_out
+```
+
 
 **Maintainer Feedback:**
 - [Date]: [Summary of feedback received]
 - [Date]: [How you addressed it]
 
-**Status:** [Awaiting review / Iterating / Approved / Merged]
+**Status:** Awaiting review
 
 ---
 
@@ -1363,6 +1405,7 @@ This approach allowed me to perform end-to-end numerical validation despite the 
 
 ## Resources Used
 
-- [Link to helpful documentation]
-- [Tutorial or Stack Overflow post that helped]
-- [GitHub issues or discussions that helped]
+- [Parameter-Efficient Sparsity Crafting from Dense to Mixture-of-Experts for Instruction Tuning on General Tasks
+](https://arxiv.org/abs/2401.02731)
+
+- [sparsetral-16x7B-v2](https://huggingface.co/serpdotai/sparsetral-16x7B-v2/tree/main)
