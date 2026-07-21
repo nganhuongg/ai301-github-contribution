@@ -1299,7 +1299,7 @@ This validates that the sparse-adapter changes did not regress the existing GGUF
 
 ### Technical Skills Gained
 
-Through this contribution, I developed a much deeper understanding of GGML and computation-graph-based inference. I learned that llama.cpp does not execute a model as a sequence of high-level neural-network modules in the same way as PyTorch. Instead, it constructs a graph of tensor operations such as matrix multiplication, normalization, activation, expert routing, and residual addition. Each resulting tensor records the operation that produced it and its dependencies, allowing GGML to determine the correct execution order.
+Through this contribution, I developed a much deeper understanding of GGML and computation-graph-based inference. I learned that `llama.cpp` does not execute a model as a sequence of high-level neural-network modules in the same way as PyTorch. Instead, it constructs a graph of tensor operations such as matrix multiplication, normalization, activation, expert routing, and residual addition. Each resulting tensor records the operation that produced it and its dependencies, allowing GGML to determine the correct execution order.
 
 I also learned how computation graphs support efficient local inference. Because GGML knows the dependencies and lifetimes of intermediate tensors, it can plan memory allocation, reuse temporary buffers when values are no longer needed, and dispatch operations to optimized backend kernels. This is especially important for large language models, where memory usage and memory bandwidth are often more restrictive than the arithmetic itself.
 
