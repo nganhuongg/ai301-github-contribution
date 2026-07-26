@@ -6,7 +6,7 @@
 
 **Issue:** [Support for Sparse MoE models like Camelidae and Sparsetral](https://github.com/ggml-org/llama.cpp/issues/5365)  
 
-**Status:** Phase III - Completed
+**Status:** Phase IV - In Progress
 
 ---
 
@@ -1272,13 +1272,6 @@ Result: 7/7 passed.
 
 This validates that the sparse-adapter changes did not regress the existing GGUF format handling, model load/cancel path, backend sampler path, save/load state behavior, or threaded inference behavior. These tests are complementary to the Sparsetral-specific validation: they do not prove Sparsetral logit correctness, but they verify the shared llama.cpp infrastructure touched or depended on by the change still behaves correctly.
 
-  
-### Code Changes
-
-- **Files modified:** [List]
-- **Key commits:** [Links to important commits]
-- **Approach decisions:** [Why you chose certain approaches]
-
 ---
 
 ## Pull Request
@@ -1399,7 +1392,13 @@ This approach allowed me to perform end-to-end numerical validation despite the 
 
 ### What I'd Do Differently Next Time
 
-[Reflection on your process]
+In this contribution, I implemented support incrementally, following each new failure from conversion to loading and inference. That meaned I solved each problem as it appeared. That is reasonable for exploring an unfamiliar codebase, but it caused repeated backtracking between the converter, GGUF schema, loader, and graph code.
+
+ > Fix converter error → discover missing metadata → discover missing tensor mappings → discover loader selects wrong MoE path → discover adapter tensors are not in the graph → add numerical testing afterward
+
+Next time, I would first map the full model-support pipeline and define the expected metadata, tensor shapes, runtime path, and validation strategy. I will study the Hugging Face forward pass, list required metadata and tensors, define GGUF shapes and names and identify loading behavior. After that, I can design the GGML graph, define correctness tests and implement each stage.
+
+This would reduce backtracking and make the implementation more systematic.
 
 ---
 
