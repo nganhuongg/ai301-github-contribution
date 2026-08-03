@@ -1272,6 +1272,128 @@ Result: 7/7 passed.
 
 This validates that the sparse-adapter changes did not regress the existing GGUF format handling, model load/cancel path, backend sampler path, save/load state behavior, or threaded inference behavior. These tests are complementary to the Sparsetral-specific validation: they do not prove Sparsetral logit correctness, but they verify the shared llama.cpp infrastructure touched or depended on by the change still behaves correctly.
 
+### Week 8 Progress
+
+#### Investigate Camelidae compatibility
+
+After validating the sparse-adapter path with Sparsetral, I started testing
+Camelidae to determine whether the same runtime graph can support another model
+from the PESC sparse-adapter family.
+
+I used `hywu/Camelidae-8x7B` as the first target because it is the smallest
+official Camelidae checkpoint. I downloaded its configuration and custom model
+source, then compared its adapter forward pass with the Sparsetral reference
+implementation.
+
+The Camelidae configuration contains:
+
+```text
+architectures = modeling_camelidae.LlamaForCausalLM
+model_type = camelidae
+num_experts = 8
+topk = 2
+adapter_dim = 512
+moe_scaling = 0.25
+```
+
+The reference comparison showed that both models use the same main
+sparse-adapter computation:
+
+```text
+dense_out     = dense_ffn(ffn_norm)
+router_logits = adapter_router(ffn_norm)
+adapter_out   = routed_adapter_moe(dense_out, router_logits)
+ffn_out       = dense_out + adapter_out
+```
+
+Both implementations use `GELU` inside the adapter experts. Camelidae selects
+the top-k router logits and applies softmax to the selected values. Sparsetral
+applies softmax before top-k and renormalizes the selected values. The two forms
+produce the same normalized weights for the selected experts. Therefore, the
+existing sparse-adapter graph can be reused and a Camelidae-specific C++ graph
+is not required.
+
+#### Reproduce the Camelidae converter failure
+
+I created a minimal Camelidae model directory containing the configuration,
+custom model source, tokenizer files, and PyTorch weight index. Running the
+unmodified converter produced:
+
+```text
+INFO:hf-to-gguf:Model architecture: modeling_camelidae.LlamaForCausalLM
+ERROR:hf-to-gguf:Model modeling_camelidae.LlamaForCausalLM is not supported
+```
+
+This confirmed that the first Camelidae-specific gap was converter
+registration, not runtime graph construction.
+
+I added a Camelidae converter entry and a small `CamelidaeModel` class that
+inherits the existing `SparsetralModel` conversion behavior. The converter then
+selected the new class successfully and progressed to the weight-loading stage:
+
+```text
+INFO:hf-to-gguf:Model architecture: modeling_camelidae.LlamaForCausalLM
+INFO:hf-to-gguf:gguf: loading model weight map from 'pytorch_model.bin.index.json'
+INFO:hf-to-gguf:gguf: indexing model part 'pytorch_model-00001-of-00002.bin'
+```
+
+The minimal directory does not contain the two checkpoint shards, so stopping
+at shard loading is expected. This result validates architecture registration
+only; it does not validate full conversion.
+
+#### Inspect the Camelidae tensor layout
+
+I inspected every entry in `pytorch_model.bin.index.json`. The checkpoint
+contains:
+
+```text
+32 transformer layers
+8 adapter experts per layer
+32 router tensors
+256 adapter_down tensors
+256 adapter_up tensors
+544 sparse-adapter tensors in total
+```
+
+The router naming matches the existing mapping:
+
+```text
+model.layers.0.mlp.moe_adapter.router.weight
+```
+
+The expert naming differs from Sparsetral:
+
+```text
+Sparsetral: model.layers.0.mlp.moe_adapter.experts.0.adapter_down.weight
+Camelidae:  model.layers.0.mlp.moe_adapter.experts.expert_0.adapter_down.weight
+```
+
+No other sparse-adapter naming pattern was present in the Camelidae weight
+index. I updated the converter design to normalize both source formats to one
+numeric canonical expert name before buffering and stacking tensors. This lets
+both model families reuse the existing expert collector and avoids duplicating
+the full conversion method.
+
+#### Current validation status
+
+The following Camelidae investigation steps have passed:
+
+- reference forward-pass comparison;
+- unsupported architecture reproduction;
+- Camelidae converter registration;
+- weight-index and expert-name analysis.
+
+Full tensor conversion has not been tested yet because the minimal fixture does
+not include the checkpoint shards. The remaining validation work is:
+
+1. Validate both expert naming formats with synthetic tensors.
+2. Convert the complete Camelidae-8x7B checkpoint.
+3. Write `moe_scaling = 0.25` as GGUF expert-weight scaling metadata.
+4. Compare F16 Camelidae logits with the Hugging Face reference.
+5. Test CPU inference and quantization.
+6. Rerun Sparsetral and shared regression tests.
+
+
 ---
 
 ## Pull Request
