@@ -1274,6 +1274,10 @@ This validates that the sparse-adapter changes did not regress the existing GGUF
 
 ### Week 8 Progress
 
+Tailored and organized the documentation
+
+### Week 9 Progress
+
 #### Investigate Camelidae compatibility
 
 After validating the sparse-adapter path with Sparsetral, I started testing
@@ -1393,6 +1397,126 @@ not include the checkpoint shards. The remaining validation work is:
 5. Test CPU inference and quantization.
 6. Rerun Sparsetral and shared regression tests.
 
+### Week 10 Progress
+
+#### Validate Camelidae expert-name normalization with synthetic tensors
+
+**Purpose:**
+
+The Camelidae weight index showed that its adapter experts use names such as
+`experts.expert_0`, while Sparsetral uses `experts.0`. Before downloading the
+complete Camelidae checkpoint, I created a focused synthetic test to verify
+that the production converter accepts both forms, produces the same canonical
+output, and preserves numeric expert ordering.
+
+This test exercises `CamelidaeModel.modify_tensors()` directly. It does not
+copy the parsing or stacking implementation into a separate test
+implementation.
+
+**Synthetic configuration:**
+
+```text
+block_count = 1
+num_experts = 3
+hidden_size = 4
+adapter_dim = 2
+```
+
+The synthetic projection shapes were:
+
+```text
+adapter_down per expert = [2, 4]
+adapter_up per expert   = [4, 2]
+
+stacked adapter_down = [3, 2, 4]
+stacked adapter_up   = [3, 4, 2]
+```
+
+The harness constructed a minimal `CamelidaeModel` instance, used the real
+LLaMA GGUF tensor-name map, and passed PyTorch tensors through the existing
+expert buffer and stacking path.
+
+**Test 1: Sparsetral numeric expert names**
+
+The first test passed tensors using the original Sparsetral form:
+
+```text
+model.layers.0.mlp.moe_adapter.experts.0.adapter_down.weight
+model.layers.0.mlp.moe_adapter.experts.1.adapter_down.weight
+model.layers.0.mlp.moe_adapter.experts.2.adapter_down.weight
+```
+
+The same test was applied to `adapter_up`. It verified that the existing
+Sparsetral form still produces one expert-stacked tensor with the expected GGUF
+name and shape.
+
+**Test 2: Camelidae `expert_N` names**
+
+The second test used the Camelidae form:
+
+```text
+model.layers.0.mlp.moe_adapter.experts.expert_0.adapter_down.weight
+model.layers.0.mlp.moe_adapter.experts.expert_1.adapter_down.weight
+model.layers.0.mlp.moe_adapter.experts.expert_2.adapter_down.weight
+```
+
+It verified that both `adapter_down` and `adapter_up` produce the same output
+names, shapes, and tensor values as the Sparsetral numeric form.
+
+**Test 3: Numeric expert ordering**
+
+To ensure that stacking does not depend on checkpoint arrival order, I passed
+the experts in this order:
+
+```text
+expert 2, expert 0, expert 1
+```
+
+Each expert contained a distinct constant value:
+
+```text
+expert 0 = 10
+expert 1 = 20
+expert 2 = 30
+```
+
+The merged tensor was verified to contain values in numeric expert order:
+
+```text
+merged[0] = 10
+merged[1] = 20
+merged[2] = 30
+```
+
+This ordering test was run for both the Sparsetral and Camelidae name formats.
+
+**Command:**
+
+```powershell
+cd D:\Test\llama.cpp
+$env:PYTHONPATH = "D:\Test\llama.cpp"
+& .\.venv\Scripts\python.exe $testFile
+```
+
+**Result:**
+
+```text
+PASS: Sparsetral numeric expert names
+PASS: Camelidae expert_N names
+PASS: numeric expert ordering
+```
+
+The three synthetic tests passed. This validates that the converter change
+preserves the existing Sparsetral behavior while accepting Camelidae expert
+names and stacking experts by numeric ID rather than input order.
+
+**Current limitation:**
+
+The synthetic test validates parsing, canonicalization, tensor mapping, and
+stacking with small tensors. It does not validate the complete Camelidae
+checkpoint, GGUF metadata scaling, model loading, or numerical inference. The
+next step is full Camelidae-8x7B conversion and verification of
+`moe_scaling = 0.25`.
 
 ---
 
