@@ -189,23 +189,6 @@ Using UMPIRE framework (adapted):
 
 **Implement:** https://github.com/nganhuongg/llama.cpp/tree/fix-issue-5365
 
-**Review:** 
-Before submitting a PR, I will verify that:
-
-- [ ] The issue is not already being addressed by another open PR.
-- [ ] The implementation is limited to a single feature (Sparse MoE architecture support) and does not include unrelated changes.
-- [ ] The solution follows existing llama.cpp architecture registration and converter patterns whenever possible.
-- [ ] No unnecessary third-party dependencies, files, or frameworks are introduced.
-- [ ] New code follows the project's coding guidelines (naming conventions, formatting, and existing code style).
-- [ ] The implementation remains cross-platform and does not introduce platform-specific assumptions.
-- [ ] I can explain every line of code that I submit.
-- [ ] Any AI assistance was limited to code navigation, explanation, debugging support, and drafting ideas; the final implementation and reasoning are manually reviewed and understood.
-- [ ] Existing functionality for supported models is not broken.
-- [ ] Relevant conversion and loading tests have been executed successfully.
-- [ ] The change is focused on CPU support only unless additional backend support is explicitly required.
-- [ ] Commit messages are clear and follow project conventions.
-- [ ] The PR description clearly explains the problem, implementation approach, and validation results.
-
 **Evaluate:** I will verify the fix by:
 
 - Running the converter on the minimal Sparsetral reproduction directory.
