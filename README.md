@@ -5,6 +5,7 @@
 **Student:** Ngan Huong Nguyen
 
 **Issue:** [Support for Sparse MoE models like Camelidae and Sparsetral](https://github.com/ggml-org/llama.cpp/issues/5365)  
+
 **PR Link:** [PR Link](https://github.com/ggml-org/llama.cpp/pull/25971)
 
 ---
