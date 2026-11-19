@@ -12,9 +12,7 @@
 
 ## Why I Chose This Issue
 
-I chose this issue because it is closely related to areas that I want to explore deeply, including large language model inference, model architectures, and systems programming. I am currently learning NLP, transformers, and modern deep learning systems, so contributing to llama.cpp provides an opportunity to understand how production-grade inference engines support different model architectures.
-
-This issue also matches my technical background. I am comfortable with C++ and Python and have experience reading and modifying machine learning codebases. Through this contribution, I hope to learn how model conversion, tensor mapping, and inference support are implemented in real-world LLM infrastructure.
+I chose this issue because it is closely related to areas that I want to explore deeply, including large language model inference, model architectures, and systems programming. It also matches my technical background. I am comfortable with C++ and Python and have experience reading and modifying machine learning codebases. Through this contribution, I hope to learn how model conversion, tensor mapping, and inference support are implemented in real-world LLM infrastructure.
 
 ---
 
@@ -61,7 +59,7 @@ Quantization:
 - This matters because routed experts are likely stored as per-expert 3D tensors or paired low-rank expert tensors. If the tensor categories are wrong, conversion might work but quantization could skip important tensors, quantize router tensors incorrectly, or produce a GGUF that no longer loads or matches the reference model.
 
 ### Defined Scope
-The goal of this contribution is not to support only a single model, but to investigate support for the Sparse LoRA-MoE architecture family described in the PESC paper. [Sparsetral](https://huggingface.co/serpdotai/sparsetral-16x7B-v2/tree/main) will be used as the initial investigation target because its public artifacts (configuration, custom modeling code, and checkpoints) make the architecture easier to inspect and reproduce. [Camelidae](https://huggingface.co/hywu/Camelidae-8x13B) will be used later to validate whether the implementation generalizes across models from the same architecture family.
+The goal of this contribution is to investigate support for the Sparse LoRA-MoE architecture family described in the PESC paper. [Sparsetral](https://huggingface.co/serpdotai/sparsetral-16x7B-v2/tree/main) will be used as the initial investigation target because its public artifacts (configuration, custom modeling code, and checkpoints) make the architecture easier to inspect and reproduce. [Camelidae](https://huggingface.co/hywu/Camelidae-8x13B) will be used later to validate whether the implementation generalizes across models from the same architecture family.
 
 ---
 
@@ -74,9 +72,7 @@ The goal of this contribution is not to support only a single model, but to inve
 
 This PR adds initial support for the Sparsetral sparse-adapter MoE architecture described in #5365.
 
-The scope of this PR is intentionally limited to **Sparsetral**. It does not add or claim support for Camelidae or every sparse MoE architecture covered by the issue.
-
-Sparsetral differs from conventional full-MoE models such as Mixtral. It keeps the dense Mistral FFN active and adds routed lightweight adapter experts on top of the dense FFN output. Because of this, it cannot use the existing assumption that any model with `expert_count > 0` contains replacement-style full FFN experts.
+The scope of this PR is intentionally limited to **Sparsetral**. Sparsetral keeps the dense Mistral FFN active and adds routed lightweight adapter experts on top of the dense FFN output. Because of this, it cannot use the existing assumption that any model with `expert_count > 0` contains replacement-style full FFN experts.
 
 This PR adds the required support across conversion, GGUF metadata, tensor loading, graph construction, and quantization:
 
@@ -121,11 +117,11 @@ layer_out     = ffn_input + ffn_out
 
 ### Environment Setup
 
-I installed requirements for the project and found out some version mismatches due to my use of Python 3.13. That caused repeated install failures because llama.cpp requirements pin packages like numpy~=1.26.4, which do not have suitable wheels for Python 3.13. Pip tried to build NumPy from source, then failed because no C/C++ compiler was installed. The fix was to use Python 3.12.10 and recreate the venv with that version. I also needed to install PyTorch version for CPU individually because the project requirements require platform_machine == "s390x".
+I created a virtual environment and installed the requirements for the project. I also needed to install PyTorch version for CPU individually because the project requirements require platform_machine == "s390x".
 
 ### Steps to Reproduce
 
-1. Download the Sparsetral model: Since the initial goal is to determine whether the current conversion pipeline recognizes and supports the Sparsetral architecture, downloading the entire model checkpoint is not necessary at this stage. Therefore, to reproduce the problem, I only downloaded `config.json`, `tokenizer_config.json`, `tokenizer.model`, `modeling_sparsetral.py`, `model.safetensors.index.json` and `configuration_sparsetral.py`
+1. Download the Sparsetral model: Since the initial goal is to determine whether the current conversion pipeline recognizes and supports the Sparsetral architecture, I only downloaded `config.json`, `tokenizer_config.json`, `tokenizer.model`, `modeling_sparsetral.py`, `model.safetensors.index.json` and `configuration_sparsetral.py`
 
 2. Create a local model directory and place the downloaded files inside it.
 
@@ -158,17 +154,13 @@ This suggests that the issue is not basic architecture recognition, but rather t
 
 ### Analysis
 
-After reproducing the issue, I found that the converter can read the local Sparsetral model configuration, but fails when it tries to match the model architecture to a supported converter implementation. This suggests that the first root cause is the absence of a registered conversion path for Sparsetral in the Hugging Face to GGUF conversion pipeline. The converter identifies the architecture as `modeling_sparsetral.MistralForCausalLM`, but does not know which existing converter class or architecture mapping should handle it.
+After reproducing the issue, I found that the converter can read the local Sparsetral model configuration, but fails when it tries to match the model architecture to a supported converter implementation. This suggests that the first root cause is the absence of a registered conversion path for Sparsetral in the Hugging Face-to-GGUF conversion pipeline. The converter identifies the architecture as `modeling_sparsetral.MistralForCausalLM`, but does not know which existing converter class or architecture mapping should handle it.
 
 ### Proposed Solution
 
-I will first investigate whether Sparsetral can reuse an existing Mistral or Mixtral-style converter path with modifications, or whether it needs a dedicated converter class. The first fix should be narrowly scoped to architecture recognition and conversion support before attempting runtime inference or quantization.
-
-If Sparsetral’s base tensors match an existing Mistral-style layout, I will reuse the existing conversion logic as much as possible and only add the missing mappings for Sparsetral-specific router and sparse adapter expert tensors.
+I will first investigate whether Sparsetral can reuse an existing Mistral or Mixtral-style converter path with modifications, or whether it needs a dedicated converter class. If Sparsetral’s base tensors match an existing Mistral-style layout, I will reuse the existing conversion logic as much as possible and only add the missing mappings for Sparsetral-specific router and sparse adapter expert tensors.
 
 ### Implementation Plan
-
-Using UMPIRE framework (adapted):
 
 **Understand:** The current converter does not support Sparsetral. It can identify the model architecture, but fails because `modeling_sparsetral.MistralForCausalLM` is not registered or mapped to a supported converter path.
 
