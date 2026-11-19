@@ -10,6 +10,16 @@
 
 ---
 
+## TL;DR
+
+I implemented initial Sparsetral support in llama.cpp ([PR #25971](https://github.com/ggml-org/llama.cpp/pull/25971)). I extended the Python/PyTorch converter to stack adapter expert weights into GGUF, added C++ tensor loading and a GGML graph that applies the top-k routed adapters to the dense Mistral FFN output, and registered the adapter tensors for quantization.
+
+On one fixed prompt, the top logits closely aligned with the Hugging Face reference run on Modal. Dense and full-MoE smoke tests passed, along with 7/7 focused CTest checks.
+
+This note covers [reproduction](#reproduction-process), [validation](#testing-strategy), and [implementation](#implementation-notes), including [Camelidae converter experiments](#week-9-progress) with synthetic tensor checks.
+
+---
+
 ## Why I Chose This Issue
 
 I chose this issue because it is closely related to areas that I want to explore deeply, including large language model inference, model architectures, and systems programming. It also matches my technical background. I am comfortable with C++ and Python and have experience reading and modifying machine learning codebases. Through this contribution, I hope to learn how model conversion, tensor mapping, and inference support are implemented in real-world LLM infrastructure.
@@ -125,8 +135,9 @@ I created a virtual environment and installed the requirements for the project. 
 
 2. Create a local model directory and place the downloaded files inside it.
 
-   ````bash
-   mkdir -p models/sparsetral-minimal`
+   ```bash
+   mkdir -p models/sparsetral-minimal
+   ```
 
 3. Attempt to run the standard Hugging Face to GGUF conversion pipeline
 
